@@ -1,0 +1,17 @@
+
+build/
+dpdk/build/
+*.swp
+debian/hpt/
+debian/.debhelper/
+artifacts/
+
+
+debian/
+scripts
+
+*.md
+*.conf
+*.build
+*.txt
+

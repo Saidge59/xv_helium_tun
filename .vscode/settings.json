@@ -1,0 +1,22 @@
+{
+    "files.associations": {
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "hpt_dev.h": "c",
+        "hpt_common.h": "c",
+        "typeinfo": "c",
+        "algorithm": "c",
+        "stdlib.h": "c",
+        "initializer_list": "c",
+        "utility": "c",
+        "stdbool.h": "c",
+        "hpt.h": "c",
+        "futex.h": "c",
+        "epoll.h": "c",
+        "stdio.h": "c",
+        "time.h": "c",
+        "stdint.h": "c",
+        "pthread.h": "c"
+    }
+}
