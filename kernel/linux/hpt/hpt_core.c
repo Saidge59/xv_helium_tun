@@ -58,19 +58,6 @@ static int hpt_open(struct inode *inode, struct file *file);
 static int hpt_release(struct inode *inode, struct file *file);
 
 /**********************************************************************************************//**
-* @brief hpt_allocate_buffers: Allocate buffers for the HPT device
-* @param hpt: Pointer to the hpt_dev structure
-* @return 0 on success, or a negative error code on failure
-**************************************************************************************************/
-static int hpt_allocate_buffers(struct hpt_dev *hpt);
-
-/**********************************************************************************************//**
-* @brief hpt_free_buffers: Free allocated buffers for the HPT device
-* @param hpt: Pointer to the hpt_dev structure
-**************************************************************************************************/
-static void hpt_free_buffers(struct hpt_dev *hpt);
-
-/**********************************************************************************************//**
 * @brief hpt_mmap: Memory mapping function for the HPT device
 * @param file: Pointer to the file structure for the device
 * @param vma: Pointer to the vm_area_struct representing the memory area to map
@@ -209,9 +196,8 @@ static unsigned int hpt_poll(struct file *file, struct poll_table_struct *poll_t
 	if(dev_info) 
 	{
 		poll_wait(file, &dev_info->tx_busy, poll_table);
-		if(dev_info->tx_count) 
+		if(hpt_count_items(dev_info->ring_info_tx)) 
 		{
-			dev_info->tx_count--;
 			mask |= POLLIN | POLLRDNORM; /* readable */
 		}
 	}
@@ -232,10 +218,6 @@ static int hpt_open(struct inode *inode, struct file *file)
 	if (!hpt_capable()) {
 		return -EINVAL;
 	}
-
-	mutex_lock(&hpt_device->device_mutex);
-    hpt_device->count_devices++;
-    mutex_unlock(&hpt_device->device_mutex);
 	
 	file->private_data = NULL;
 	pr_info("HPT open!\n");
@@ -248,21 +230,11 @@ static int hpt_release(struct inode *inode, struct file *file)
 
 	rtnl_lock();
 
-	mutex_lock(&hpt_device->device_mutex);
-
-	hpt_device->count_devices--;
-	if(hpt_device->count_devices == 0)
-	{
-		hpt_device->allocate_buffers = 0;
-	}
-
-	mutex_unlock(&hpt_device->device_mutex);
-
 	dev_info = file->private_data;
 
 	if(dev_info) 
 	{
-		if (dev_info->pthread != NULL) {
+		if (dev_info->pthread) {
 			kthread_stop(dev_info->pthread);
 			dev_info->pthread = NULL;
 		}
@@ -271,29 +243,18 @@ static int hpt_release(struct inode *inode, struct file *file)
 
 		hpt_free_skb(dev_info);
 
-		size_t start = dev_info->start_indx;
-		size_t end = dev_info->start_indx + dev_info->count_buffers;
-		hpt_buffer_info_t *buffer_info;
+		if(dev_info->ring_memory)
+		{
+			vfree(dev_info->ring_memory);
+			dev_info->ring_memory = NULL;
+		}
 
-		if(dev_info->net_dev != NULL)
+		if(dev_info->net_dev)
 		{
 			unregister_netdevice(dev_info->net_dev);
 			free_netdev(dev_info->net_dev);
 			file->private_data = NULL;
 		}
-
-		mutex_lock(&hpt_device->device_mutex);
-
-		for (int i = start; i < end; i++) 
-		{
-			buffer_info = hpt_device->buffers_combined[i];
-			if (buffer_info) 
-			{
-				STORE(&buffer_info->in_use, 0);
-			}
-		}
-
-		mutex_unlock(&hpt_device->device_mutex);
 	}
 
 	pr_info("HPT close!\n");
@@ -302,125 +263,104 @@ static int hpt_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int hpt_allocate_buffers(struct hpt_dev *hpt)
-{
-	void *buffer;
-    for (int i = 0; i < HPT_BUFFER_COUNT; i++) 
-	{
-		//buffer = dma_alloc_coherent(&hpt->pdev->dev, HPT_BUFFER_SIZE, &hpt->dma_handle[i], GFP_KERNEL);
-
-		buffer = vmalloc_user(HPT_BUFFER_SIZE);
-
-		if (!buffer) {
-			pr_err("Failed to allocate combined buffer %d\n", i);
-			return -ENOMEM;
-		}
-		hpt_buffer_info_t *buffer_info = (hpt_buffer_info_t *)buffer;
-		STORE(&buffer_info->in_use, 0);
-		
-		hpt->buffers_combined[i] = buffer;
-	}
-	
-	pr_info("DMA buffer allocated successfully\n");
-	return 0;
-}
-
-static void hpt_free_buffers(struct hpt_dev *hpt)
-{
-	void *buffer;
-	for (int i = 0; i < HPT_BUFFER_COUNT; i++) 
-	{
-		buffer = hpt->buffers_combined[i];
-		if (buffer) 
-		{
-			//dma_free_coherent(hpt->device, HPT_BUFFER_SIZE, buffer, hpt->dma_handle[i]);
-			vfree(hpt->buffers_combined[i]);
-
-			hpt->buffers_combined[i] = NULL;
-            //hpt->dma_handle[i] = 0;
-   		}
-	}
-	
-    pr_info("DMA buffer free successfully\n");
-}
-
 static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 {
-    int buffer_idx;
-    void *buffer;
+	int ret = 0;
+	struct hpt_net_device_info *dev_info;
     unsigned long pfn;
-    struct hpt_net_device_info *dev_info;
-    hpt_buffer_info_t *buffer_info;
-	unsigned long offset;
+	unsigned long size;
+	unsigned long num_ring_memory;
+	unsigned long virt_addr;
 
-    mutex_lock(&hpt_device->device_mutex);
+	mutex_lock(&hpt_device->device_mutex);
+
+	size = vma->vm_end - vma->vm_start;
 
 	dev_info = file->private_data;
-	offset = vma->vm_start;
 
-	if(dev_info->count_buffers + hpt_device->allocate_buffers > HPT_BUFFER_COUNT) {
-        pr_err("Cannot allocate that count buffers\n");
-        mutex_unlock(&hpt_device->device_mutex);
-        return -EINVAL;
-    }
-
-	dev_info->start_indx = hpt_device->allocate_buffers;
-
-	for(int i = 0; i < dev_info->count_buffers; i++)
+	num_ring_memory = (2 * sizeof(struct hpt_ring_buffer)) + (2 * dev_info->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+	if(size < num_ring_memory) 
 	{
-		buffer_idx = hpt_device->allocate_buffers;
-		buffer = hpt_device->buffers_combined[buffer_idx];
-		//pfn = hpt_device->dma_handle[buffer_idx] >> PAGE_SHIFT;
-		pfn = page_to_pfn(vmalloc_to_page(buffer));
-
-		if(remap_pfn_range(vma, offset, pfn, HPT_BUFFER_SIZE, vma->vm_page_prot))
-		{
-        	return -EAGAIN;
-		}
-
-		buffer_info = (hpt_buffer_info_t *)buffer;
-		STORE(&buffer_info->in_use, 1);
-		STORE(&buffer_info->state_rx, HPT_BUFFER_RX_EMPTY);
-		STORE(&buffer_info->state_tx, HPT_BUFFER_TX_EMPTY);
-
-		hpt_device->allocate_buffers++;
-		offset += HPT_BUFFER_SIZE;
+		pr_info("User requested mmap size: %lu, kernel size: %lu\n", size, num_ring_memory);
+		ret = -EINVAL;
+		goto end;
 	}
 
-    mutex_unlock(&hpt_device->device_mutex);
-	return 0;
+	size_t aligned_size = PAGE_ALIGN(num_ring_memory);
+
+	dev_info->ring_memory = vmalloc(aligned_size);
+	if(!dev_info->ring_memory) 
+	{
+		pr_err("Cannot allocate memory\n");
+		ret = -EINVAL;
+		goto end;
+	}
+
+	virt_addr = (unsigned long)dev_info->ring_memory;
+
+	for(size_t i = 0; i < aligned_size; i += PAGE_SIZE) 
+	{
+		pfn = vmalloc_to_pfn((void *)(virt_addr + i));
+
+		if (remap_pfn_range(vma, vma->vm_start + i, pfn, PAGE_SIZE, vma->vm_page_prot)) {
+			pr_err("Failed to remap vmalloc memory at offset %zu\n", i);
+			ret = -EIO;
+			goto end;
+		}
+	}
+
+	dev_info->ring_info_tx = (struct hpt_ring_buffer *)dev_info->ring_memory;
+	dev_info->ring_info_rx = dev_info->ring_info_tx + 1;
+    dev_info->ring_data_tx = (uint8_t *)(dev_info->ring_info_rx + 1);
+    dev_info->ring_data_rx = dev_info->ring_data_tx + (dev_info->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+
+    pr_info("Memory mapped to user space at %lx\n", vma->vm_start);
+
+end:
+	mutex_unlock(&hpt_device->device_mutex);
+
+    return ret;
 }
 
-static int hpt_ioctl_create(struct file *file, struct net *net,
-			    uint32_t ioctl_num, unsigned long ioctl_param)
+static int hpt_ioctl_create(struct file *file, struct net *net, uint32_t ioctl_num, unsigned long ioctl_param)
 {
 	struct net_device *net_dev = NULL;
 	struct hpt_net_device_param net_dev_name;
 	struct hpt_net_device_info *dev_info;
 	int ret;
 
-	if (_IOC_SIZE(ioctl_num) != sizeof(net_dev_name)) {
+	if(_IOC_SIZE(ioctl_num) != sizeof(net_dev_name)) 
+	{
 		pr_err("Error check the buffer size\n");
 		return -EINVAL;
 	}
 
-	if (copy_from_user(&net_dev_name, (void *)ioctl_param, sizeof(net_dev_name))) {
+	if(copy_from_user(&net_dev_name, (void *)ioctl_param, sizeof(net_dev_name))) 
+	{
 		pr_err("Error copy hpt info from user space\n");
 		return -EFAULT;
 	}
 
-	if (strnlen(net_dev_name.name, sizeof(net_dev_name.name)) ==
-	    sizeof(net_dev_name.name)) {
+	if(strnlen(net_dev_name.name, sizeof(net_dev_name.name)) == sizeof(net_dev_name.name)) 
+	{
 		pr_err("hpt.name not zero-terminated");
 		return -EINVAL;
 	}
+
+	if(net_dev_name.ring_buffer_items == 0 || net_dev_name.ring_buffer_items > HPT_MAX_ITEMS)
+    {
+        pr_err("Cannot allocate %zu buffers\n", net_dev_name.ring_buffer_items);
+        return -EINVAL;
+    }
 
 	net_dev = alloc_netdev(sizeof(struct hpt_net_device_info), net_dev_name.name,
 #ifdef NET_NAME_USER
 			       NET_NAME_USER,
 #endif
 			       hpt_net_init);
-	if (net_dev == NULL) {
+
+	if(net_dev == NULL)
+	{
 		pr_err("Error allocating device \"%s\"\n", net_dev_name.name);
         return -EBUSY;
 	}
@@ -436,7 +376,7 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 	
 	memset(dev_info, 0, sizeof(struct hpt_net_device_info));
 
-	dev_info->count_buffers = net_dev_name.alloc_buffers_count;
+	dev_info->ring_buffer_items = net_dev_name.ring_buffer_items;
 	dev_info->net_dev = net_dev;
 	
 	init_waitqueue_head(&dev_info->tx_busy);
@@ -543,42 +483,17 @@ static int __init hpt_init(void)
         goto del_cdev;
     }
 
-    hpt_device->pdev = platform_device_register_simple(HPT_DEVICE_NAME, -1, NULL, 0);
-    if (IS_ERR(hpt_device->pdev)) {
-        pr_err("Failed to register platform device\n");
-        ret = PTR_ERR(hpt_device->pdev);
-        goto destroy_class;
-    }
-
-    ret = dma_set_mask_and_coherent(&hpt_device->pdev->dev, DMA_BIT_MASK(64));
-    if (ret) {
-        pr_err("Failed to set DMA mask\n");
-        goto unregister_platform_device;
-    }
-
-    hpt_device->device = device_create(hpt_device->class, &hpt_device->pdev->dev,
-                                      hpt_device->devt, NULL, HPT_DEVICE_NAME);
+    hpt_device->device = device_create(hpt_device->class, NULL, hpt_device->devt, NULL, HPT_DEVICE_NAME);
     if (IS_ERR(hpt_device->device)) {
         pr_err("Failed to create device\n");
         ret = PTR_ERR(hpt_device->device);
-        goto unregister_platform_device;
+		goto destroy_class;
     }
-
-	ret = hpt_allocate_buffers(hpt_device);
-	if (ret != 0) {
-		pr_err("Failed to allocate DMA buffer\n");
-        ret = -ENOMEM;
-        goto destroy_device;
-	}
 
 	mutex_init(&hpt_device->device_mutex);
 
     return 0;
 
-destroy_device:
-	device_destroy(hpt_device->class, hpt_device->devt);
-unregister_platform_device:
-    platform_device_unregister(hpt_device->pdev);
 destroy_class:
     class_destroy(hpt_device->class);
 del_cdev:
@@ -595,9 +510,7 @@ static void __exit hpt_exit(void)
 {
 	if(hpt_device)
 	{
-		hpt_free_buffers(hpt_device);
 		device_destroy(hpt_device->class, hpt_device->devt);
-		platform_device_unregister(hpt_device->pdev);
 		class_destroy(hpt_device->class);
 		cdev_del(&hpt_device->cdev);
 		unregister_chrdev_region(hpt_device->devt, 1);

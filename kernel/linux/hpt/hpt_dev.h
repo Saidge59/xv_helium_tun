@@ -45,13 +45,16 @@
 struct hpt_net_device_info
 {
 	char name[HPT_NAMESIZE];
-    uint32_t start_indx;
-    uint32_t count_buffers;
 	struct task_struct *pthread;
 	struct net_device *net_dev;
     struct sk_buff *sk_buffers[HPT_SKB_COUNT];
     wait_queue_head_t tx_busy;
-    uint32_t tx_count;
+    uint32_t ring_buffer_items;
+    struct hpt_ring_buffer *ring_info_rx;
+    struct hpt_ring_buffer *ring_info_tx;
+    void *ring_memory;
+    uint8_t *ring_data_rx;
+    uint8_t *ring_data_tx;
 };
 
 /**********************************************************************************************//**
@@ -63,11 +66,6 @@ struct hpt_dev
     struct device *device;
     struct cdev cdev;
     dev_t devt;
-    uint32_t count_devices;
-    uint32_t allocate_buffers;
-    void* buffers_combined[HPT_BUFFER_COUNT];
-    dma_addr_t dma_handle[HPT_BUFFER_COUNT];
-    struct platform_device *pdev;
     struct mutex device_mutex;
 };
 
@@ -83,10 +81,5 @@ size_t hpt_net_rx(struct hpt_net_device_info *hpt);
 * @param dev: Pointer to the net_device structure representing the network device
 **************************************************************************************************/
 void hpt_net_init(struct net_device *dev);
-
-#define HPT_START_OFFSET_WRITE sizeof(hpt_buffer_info_t)
-#define HPT_START_OFFSET_READ (sizeof(hpt_buffer_info_t) + HPT_BUFFER_HALF_SIZE)
-#define HPT_MAX_LENGTH_WRITE (HPT_BUFFER_HALF_SIZE - HPT_START_OFFSET_WRITE)
-#define HPT_MAX_LENGTH_READ HPT_BUFFER_HALF_SIZE
 
 #endif

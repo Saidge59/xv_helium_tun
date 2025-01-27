@@ -136,44 +136,24 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 		return NETDEV_TX_OK;
 	}
 
-	hpt_buffer_info_t *buffer_info;
 	unsigned int len = skb->len;
 
-	size_t start = dev_info->start_indx;
-	size_t end = dev_info->start_indx + dev_info->count_buffers;
+	if(!len) 
+	{
+		goto drop;
+	}
 
-	for(int i = start; i < end; i++)
-    {
-		buffer_info = (hpt_buffer_info_t *)hpt_device->buffers_combined[i];
-		
-        if(!ACQUIRE(&buffer_info->in_use)) continue;
-		if(ACQUIRE(&buffer_info->state_tx) != HPT_BUFFER_TX_EMPTY) continue;
+	if(likely(hpt_set_item(dev_info->ring_info_tx, dev_info->ring_buffer_items, dev_info->ring_data_tx, skb->data, len) != 0))
+	{
+		goto drop;
+	}
 
-		STORE(&buffer_info->state_tx, HPT_BUFFER_TX_BUSY);
+	dev_kfree_skb(skb);
 
-		if(len > HPT_MAX_LENGTH_READ)
-		{
-			pr_err("Too big a packet for write\n");
-			STORE(&buffer_info->state_tx, HPT_BUFFER_TX_EMPTY);
-			goto drop;
-		}
+	dev_info->net_dev->stats.tx_bytes += len;
+	dev_info->net_dev->stats.tx_packets++;
 
-		uint8_t *data = (uint8_t *)buffer_info + HPT_START_OFFSET_READ;
-
-		memcpy(data, skb->data, len);
-		buffer_info->size = len;
-		STORE(&buffer_info->state_tx, HPT_BUFFER_TX_READY);
-
-		dev_kfree_skb(skb);
-
-		dev_info->net_dev->stats.tx_bytes += len;
-		dev_info->net_dev->stats.tx_packets++;
-
-		dev_info->tx_count++;
-		wake_up_interruptible(&dev_info->tx_busy);
-		
-		break;
-    }
+	wake_up_interruptible(&dev_info->tx_busy);
 
 	return NETDEV_TX_OK;
 
@@ -189,29 +169,28 @@ size_t hpt_net_rx(struct hpt_net_device_info *dev_info)
     struct net_device *net_dev = dev_info->net_dev;
     struct sk_buff *skb;
     size_t num_processed = 0;
-    int ret;
+    int i, num, len;
     u8 ip_version;
-	hpt_buffer_info_t *buffer_info;
+	struct hpt_ring_buffer_element *item;
 
-	size_t start = dev_info->start_indx;
-	size_t end = dev_info->start_indx + dev_info->count_buffers;
+	if(!dev_info->ring_info_rx) return -1;
 
-    for(int i = start; i < end; i++) 
+	num = hpt_count_items(dev_info->ring_info_rx);
+
+	for (i = 0; i < num; i++)
 	{
-        buffer_info = (hpt_buffer_info_t *)hpt_device->buffers_combined[i];
+		item = hpt_get_item(dev_info->ring_info_rx, dev_info->ring_buffer_items, dev_info->ring_data_rx);
+		if(unlikely(!item)) 
+		{
+			break;
+		}
 
-        if(!ACQUIRE(&buffer_info->in_use)) continue;
-		if(ACQUIRE(&buffer_info->state_rx) != HPT_BUFFER_RX_READY) continue;
-		
-		STORE(&buffer_info->state_rx, HPT_BUFFER_RX_BUSY);
+		len = item->len;
 
-		uint8_t *data = (uint8_t *)buffer_info + HPT_START_OFFSET_WRITE;
-
-		size_t len = ((uint16_t)data[HPT_IP_HEADER_LENGTH_MSB] << 8) | data[HPT_IP_HEADER_LENGTH_LSB];
-
-		if(unlikely(len == 0 || len > HPT_MAX_LENGTH_WRITE)) {
+		if(unlikely(len == 0 || len > HPT_RB_ELEMENT_USABLE_SPACE)) 
+		{
 		    net_dev->stats.rx_dropped++;
-			STORE(&buffer_info->state_rx, HPT_BUFFER_RX_EMPTY);
+			hpt_set_read_item(dev_info->ring_info_rx);
 			pr_err("Drop packets that are len out of range\n");
         	continue;
         }
@@ -219,16 +198,14 @@ size_t hpt_net_rx(struct hpt_net_device_info *dev_info)
 		skb = hpt_get_sk_buffer(dev_info);
         if(unlikely(!skb)) {
             net_dev->stats.rx_dropped++;
-			STORE(&buffer_info->state_rx, HPT_BUFFER_RX_EMPTY);
+			hpt_set_read_item(dev_info->ring_info_rx);
 			pr_err("Could not allocate memory to transmit a packet\n");
         	continue;
         }
 
-        // Copy the decrypted data into the SKB
-        memcpy(skb_put(skb, len), data, len);
-		STORE(&buffer_info->state_rx, HPT_BUFFER_RX_EMPTY);
+        memcpy(skb_put(skb, len), item->data, len);
+		hpt_set_read_item(dev_info->ring_info_rx);
 
-        // Check the IP version (from the start of the buffer)
         ip_version = skb->len ? (skb->data[HPT_IP_VERSION] >> 4) : 0;
 
         if(unlikely(!(ip_version == 4 || ip_version == 6))) {
@@ -246,7 +223,7 @@ size_t hpt_net_rx(struct hpt_net_device_info *dev_info)
         skb_probe_transport_header(skb);
 
         // Send the SKB to the network stack
-        ret = netif_rx(skb);
+        netif_rx(skb);
 
         // Update statistics
         net_dev->stats.rx_bytes += len;

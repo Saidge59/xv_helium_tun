@@ -13,17 +13,17 @@
 
 #include "hpt.h"
 
-/**********************************************************************************************//**
-* @brief hpt_get_buffer: Retrieve a buffer based on the given flag
-* @param dev: Pointer to the HPT device structure
-* @param flag: Flag to determine buffer selection criteria
-* @return Pointer to the selected hpt_buffer_info_t structure, or NULL if not found
-**************************************************************************************************/
-static hpt_buffer_info_t* hpt_get_buffer(struct hpt *dev, const int flag);
+#define PAGE_ALIGN(x) (((x) + sysconf(_SC_PAGESIZE) - 1) & ~(sysconf(_SC_PAGESIZE) - 1))
+
+static void print_data(struct hpt_ring_buffer_element *item)
+{	
+	int i = 0;
+	while(i < item->len) { printf("%c", item->data[i++]); }
+}
 
 int hpt_fd(struct hpt *dev)
 {
-    return dev->hpt_dev_fd;
+    return dev->fd;
 }
 
 int hpt_init()
@@ -35,34 +35,20 @@ void hpt_close(struct hpt *dev)
 {
 	if(!dev) return;
 
-	size_t start = 0;
-    size_t end = dev->alloc_buffers_count;
-    void* buffer;
-
-    for(int i = start; i < end; i++)
-    {
-		buffer = (hpt_buffer_info_t *)dev->buffers_combined[i];
-		if(buffer) 
-        {
-            munmap(buffer, HPT_BUFFER_SIZE);	
-            dev->buffers_combined[i] = NULL;	
-        }
-    }
-
-	printf("Free %s\n", dev->name);
+    if(dev->ring_memory) munmap(dev->ring_memory, dev->size_memory);
 
     //if(dev->loop) uv_loop_close(dev->loop);
 
-	close(dev->hpt_dev_fd);
+	if(dev->fd) close(dev->fd);
 
 	free(dev);
 	
 	printf("Closed %s\n", HPT_DEVICE_NAME);
 }
 
-struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t alloc_buffers_count)
+struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
 {
-    if(alloc_buffers_count == 0 || alloc_buffers_count > HPT_BUFFER_COUNT)
+    if(ring_buffer_items == 0 || ring_buffer_items > HPT_MAX_ITEMS)
     {
         printf("Cannot allocate that count buffers\n");
         return NULL;
@@ -71,7 +57,8 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t alloc_buffers_count)
     int ret;
     struct hpt *dev;
     struct hpt_net_device_param net_dev_info;
-    void* buffer;
+    void* ring_memory;
+    size_t num_ring_memory;
 
     dev = malloc(sizeof(struct hpt));
     if(!dev)
@@ -82,8 +69,8 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t alloc_buffers_count)
 
 	memset(dev, 0, sizeof(struct hpt));
 
-    dev->hpt_dev_fd = open(HPT_DEVICE_PATH, O_RDWR);
-    if(dev->hpt_dev_fd < 0)
+    dev->fd = open(HPT_DEVICE_PATH, O_RDWR);
+    if(dev->fd < 0)
     {
         printf("Error open %s\n", HPT_DEVICE_NAME);
         goto end;
@@ -96,31 +83,37 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t alloc_buffers_count)
 	strncpy(net_dev_info.name, name, HPT_NAMESIZE - 1);
 	net_dev_info.name[HPT_NAMESIZE - 1] = 0;
 
-    net_dev_info.alloc_buffers_count = alloc_buffers_count;
+    net_dev_info.ring_buffer_items = ring_buffer_items;
 
-	ret = ioctl(dev->hpt_dev_fd, HPT_IOCTL_CREATE, &net_dev_info);
+	ret = ioctl(dev->fd, HPT_IOCTL_CREATE, &net_dev_info);
 	if (ret < 0) {
         printf("Error create ioctl\n");
         goto end;
 	}
 
-    buffer = mmap(NULL, HPT_BUFFER_SIZE * alloc_buffers_count, PROT_READ | PROT_WRITE, MAP_SHARED, dev->hpt_dev_fd, 0);
-    if(buffer == MAP_FAILED) 
+	num_ring_memory = (2 * sizeof(struct hpt_ring_buffer)) + (2 * ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+    size_t aligned_size = PAGE_ALIGN(num_ring_memory);
+
+    ring_memory = mmap(NULL, aligned_size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd, 0);
+    if(ring_memory == MAP_FAILED) 
     {
-        printf("Error allocate buffers %zu\n", alloc_buffers_count);
+        printf("Error allocate memory %zu\n", aligned_size);
         goto end;
     }
 
-    for(int i = 0; i < alloc_buffers_count; i++)
-    {
-        dev->buffers_combined[i] = buffer + i*HPT_BUFFER_SIZE; 
-    }
-
-	dev->alloc_buffers_count = alloc_buffers_count;
+    dev->ring_memory = ring_memory;
+    dev->size_memory = aligned_size;
+	dev->ring_buffer_items = ring_buffer_items;
 	strncpy(dev->name, name, HPT_NAMESIZE - 1);
 	dev->name[HPT_NAMESIZE - 1] = 0;
 
-    printf("Allocate buffer success\n");
+    dev->ring_info_tx = (struct hpt_ring_buffer *)ring_memory;
+	dev->ring_info_rx = dev->ring_info_tx + 1;
+    dev->ring_data_tx = (uint8_t *)(dev->ring_info_rx + 1);
+    dev->ring_data_rx = dev->ring_data_tx + (dev->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+
+    printf("Memory mapped to user space at %p\n", ring_memory);
+    printf("Memory mapped size %ld\n", aligned_size);
 
     return dev;
 
@@ -129,7 +122,27 @@ end:
     return NULL;
 }
 
-void hpt_read(uint8_t *data)
+void hpt_read(struct hpt *dev)
+{
+	size_t num = hpt_count_items(dev->ring_info_tx);
+    struct hpt_ring_buffer_element *item;
+
+    for(size_t j = 0; j < num; j++)
+    {
+        item = hpt_get_item(dev->ring_info_tx, dev->ring_buffer_items, dev->ring_data_tx);
+        print_data(item);
+        printf("\nRead size: %d\n", item->len);
+        hpt_set_read_item(dev->ring_info_tx);
+    }
+}
+
+void hpt_write(struct hpt *dev, uint8_t *data, size_t len)
+{
+    hpt_set_item(dev->ring_info_rx, dev->ring_buffer_items, dev->ring_data_rx, data, len);
+}
+
+
+/*void hpt_read(uint8_t *data)
 {
     if(!data) return;
 
@@ -218,4 +231,4 @@ int hpt_get_rx_buffer_size(uint8_t* data)
 {
     hpt_buffer_info_t *buffer_info = (hpt_buffer_info_t *)(data - HPT_START_OFFSET_WRITE);
     return buffer_info->size;
-}
+}*/

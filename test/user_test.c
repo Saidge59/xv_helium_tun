@@ -8,13 +8,7 @@
 * @brief fill_buffer: Fill the buffer with payload
 * @param pData: Pointer to the data to be written
 **************************************************************************************************/
-static void fill_buffer(uint8_t *pData);
-
-/**********************************************************************************************//**
-* @brief print_data: Print the contents of the given buffer
-* @param pData: Pointer to the hpt_buffer_info_t structure containing the buffer to print
-**************************************************************************************************/
-static void print_data(uint8_t *pData);
+static void fill_buffer(uint8_t *pData, size_t *len);
 
 /**********************************************************************************************//**
 * @brief thread_write: Thread function for handling write operations
@@ -119,7 +113,7 @@ int main(int argc, char *argv[])
 
     //Allocation
     struct hpt *hpt = hpt_alloc(argv[1], count);
-    if(!hpt) { return 1; }
+    if(!hpt) { hpt_close(hpt); return 1; }
 
     //Set address
     ret = hpt_set_ip_address(argv[1], argv[3]);
@@ -137,8 +131,10 @@ int main(int argc, char *argv[])
     if(ret != 0) { hpt_close(hpt); return 1; }
 
     pthread_join(hpt->thread_write, NULL);
+
+    if(hpt->loop) uv_loop_close(hpt->loop);
     
-    pthread_mutex_destroy(&hpt->mutex);
+    /*pthread_mutex_destroy(&hpt->mutex);*/
 
     hpt_close(hpt); 
     
@@ -149,16 +145,16 @@ int hpt_run(struct hpt *dev)
 {
     dev->loop = uv_default_loop();
 
-    uv_poll_init(dev->loop, &dev->poll_handle, dev->hpt_dev_fd);
+    uv_poll_init(dev->loop, &dev->poll_handle, dev->fd);
 
     dev->poll_handle.data = dev;
 
     uv_poll_start(&dev->poll_handle, UV_READABLE, on_hpt_event);
 
-    if (pthread_mutex_init(&dev->mutex, NULL) != 0) {
+    /*if (pthread_mutex_init(&dev->mutex, NULL) != 0) {
         printf("Mutex init failed\n");
         return -1;
-    }
+    }*/
 
     dev->isTread = 1;
 
@@ -177,7 +173,8 @@ int hpt_run(struct hpt *dev)
 static void* thread_write(void* arg) 
 {
     struct hpt* dev = (struct hpt*)arg;
-    uint8_t *data;
+    uint8_t data[HPT_RB_ELEMENT_SIZE];
+    size_t len;
 
     while(dev->isTread)
     {
@@ -187,14 +184,11 @@ static void* thread_write(void* arg)
                 dev->isTread = 0;
                 break;
             case 'w': 
-                data = hpt_get_rx_buffer(dev);
-                if(!data) continue;
 
-                fill_buffer(data);
+                fill_buffer(data, &len);
+                hpt_write(dev, data, len);
 
-                hpt_write(data); 
-
-                printf("Write size: %d\n\n", hpt_get_rx_buffer_size(data));
+                printf("Write size: %zu\n\n", len);
                 break;
         }
     }
@@ -205,7 +199,6 @@ static void* thread_write(void* arg)
 static void on_hpt_event(uv_poll_t *handle, int status, int events)
 {
     struct hpt *dev = (struct hpt *)handle->data;
-    uint8_t *data;
 
     if(status < 0) 
     {
@@ -215,13 +208,7 @@ static void on_hpt_event(uv_poll_t *handle, int status, int events)
 
     if(events & UV_READABLE) 
     {
-        data = hpt_get_tx_buffer(dev);
-            if(data)
-            {
-                print_data(data);
-                hpt_read(data); 
-                printf("\nRead size: %d\n", hpt_get_tx_buffer_size(data));
-            }
+        hpt_read(dev);
 
         /*uint64_t val;
         ssize_t n = read(handle->io_watcher.fd, &val, sizeof(val));
@@ -281,7 +268,7 @@ static uint16_t calculate_udp_checksum(const uint8_t *ip_header, const uint8_t *
     return ~sum;
 }
 
-static void fill_buffer(uint8_t *pData)
+static void fill_buffer(uint8_t *pData, size_t *len)
 {
     unsigned char ip_header[] = {
         0x45, 0x00, 0x00, 0x00,
@@ -320,17 +307,9 @@ static void fill_buffer(uint8_t *pData)
     udp_header[6] = (udp_checksum >> 8) & 0xFF;
     udp_header[7] = udp_checksum & 0xFF;
 
-    size_t size = sizeof(ip_header) + sizeof(udp_header) + PAYLOAD_SIZE;
+    *len = sizeof(ip_header) + sizeof(udp_header) + PAYLOAD_SIZE;
 
     memcpy(pData, ip_header, sizeof(ip_header));
     memcpy(pData + sizeof(ip_header), udp_header, sizeof(udp_header));
     memcpy(pData + sizeof(ip_header) + sizeof(udp_header), payload, PAYLOAD_SIZE);
-
-    hpt_set_rx_buffer_size(pData, size);
-}
-
-static void print_data(uint8_t *pData)
-{	
-	int i = 0;
-	while(i < hpt_get_tx_buffer_size(pData)) { printf("%c", pData[i++]); }
 }
