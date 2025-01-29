@@ -4,7 +4,7 @@
 #include "hpt_common.h"
 #include <pthread.h>
 #include <sys/epoll.h>
-#include <uv.h>
+//#include <uv.h>
 #include <unistd.h>
 
 /**********************************************************************************************//**
@@ -18,8 +18,8 @@ struct hpt
     pthread_t thread_write;
     pthread_mutex_t mutex;
     //int efd;
-    uv_loop_t* loop;
-    uv_poll_t poll_handle;
+    //uv_loop_t* loop;
+    //uv_poll_t poll_handle;
     int fd;
     struct hpt_ring_buffer *ring_info_rx;
     struct hpt_ring_buffer *ring_info_tx;
@@ -30,11 +30,11 @@ struct hpt
 };
 
 /**********************************************************************************************//**
-* @brief hpt_fd: Get file descriptor for the HPT device
+* @brief hpt_efd: Get file descriptor for the HPT device
 * @param dev: Pointer to the HPT device structure
 * @return File descriptor for interacting with the HPT device
 **************************************************************************************************/
-int hpt_fd(struct hpt *dev);
+int hpt_efd(struct hpt *dev);
 
 /**********************************************************************************************//**
 * @brief hpt_efd: Get file descriptor for the HPT device
@@ -67,18 +67,51 @@ void hpt_close(struct hpt *dev);
 struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t alloc_buffers_count);
 
 /**********************************************************************************************//**
-* @brief hpt_read: Read packet
+* @brief hpt_get_tx_buffer: Retrieve a receive buffer for the HPT device
 * @param dev: Pointer to the hpt structure representing the HPT device
+* @return Pointer to the beginning of the data representing the receive buffer, or NULL if not available
 **************************************************************************************************/
-void hpt_read(struct hpt *dev);
+uint8_t* hpt_get_tx_buffer(struct hpt *dev);
 
 /**********************************************************************************************//**
-* @brief hpt_write: Write packet
+* @brief hpt_get_rx_buffer: Retrieve a transmit buffer for the HPT device
 * @param dev: Pointer to the hpt structure representing the HPT device
-* @param data: Pointer to the data
-* @param len: Length of the packet
+* @return Pointer to the beginning of the data representing the transmit buffer, or NULL if not available
 **************************************************************************************************/
-void hpt_write(struct hpt *dev, uint8_t *data, size_t len);
+uint8_t* hpt_get_rx_buffer(struct hpt *dev);
+
+/**********************************************************************************************//**
+* @brief hpt_get_tx_buffer_size: Retrieve a transmit buffer for the HPT device
+* @param pData: Pointer to the buffer to store the read data
+* @return Return the buffer size
+**************************************************************************************************/
+int hpt_get_tx_buffer_size(uint8_t* pData);
+
+/**********************************************************************************************//**
+* @brief hpt_get_rx_buffer_size: Retrieve a transmit buffer for the HPT device
+* @param pData: Pointer to the buffer to store the read data
+* @return Return the buffer size
+**************************************************************************************************/
+int hpt_get_rx_buffer_size(uint8_t* pData);
+
+/**********************************************************************************************//**
+* @brief hpt_read: Read data from the HPT device
+* @param pData: Pointer to the buffer to store the read data
+**************************************************************************************************/
+void hpt_read(uint8_t *pData);
+
+/**********************************************************************************************//**
+* @brief hpt_write: Write data to the HPT device
+* @param pData: Pointer to the buffer containing the data to write
+**************************************************************************************************/
+void hpt_write(uint8_t *pData);
+
+/**********************************************************************************************//**
+* @brief hpt_set_rx_buffer_size: Set size
+* @param data: Pointer to the buffer of data
+* @param size: Length of data
+**************************************************************************************************/
+void hpt_set_rx_buffer_size(uint8_t* data, size_t size);
 
 
 #define PAYLOAD_SIZE 1024

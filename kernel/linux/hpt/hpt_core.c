@@ -403,12 +403,12 @@ static int hpt_ioctl_create(struct file *file, struct net *net, uint32_t ioctl_n
 		goto clean_up;
 	}
 
-	ret = hpt_run_thread(dev_info);
+	/*ret = hpt_run_thread(dev_info);
 	if (ret != 0) {
 		pr_err("Couldn't start rx kernel thread: %i\n", ret);
 		unregister_netdevice(net_dev);
 		goto clean_up;
-	}
+	}*/
 	
 	file->private_data = dev_info;
 
@@ -476,7 +476,7 @@ static int __init hpt_init(void)
         goto unregister_chrdev_region;
     }
 
-    hpt_device->class = class_create(HPT_DEVICE_NAME);
+    hpt_device->class = class_create(THIS_MODULE, HPT_DEVICE_NAME);
     if (IS_ERR(hpt_device->class)) {
         pr_err("Failed to create class\n");
         ret = PTR_ERR(hpt_device->class);

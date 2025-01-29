@@ -21,7 +21,7 @@ static void print_data(struct hpt_ring_buffer_element *item)
 	while(i < item->len) { printf("%c", item->data[i++]); }
 }
 
-int hpt_fd(struct hpt *dev)
+int hpt_efd(struct hpt *dev)
 {
     return dev->fd;
 }
@@ -122,113 +122,46 @@ end:
     return NULL;
 }
 
-void hpt_read(struct hpt *dev)
+void hpt_read(uint8_t *data)
 {
-	size_t num = hpt_count_items(dev->ring_info_tx);
-    struct hpt_ring_buffer_element *item;
-
-    for(size_t j = 0; j < num; j++)
-    {
-        item = hpt_get_item(dev->ring_info_tx, dev->ring_buffer_items, dev->ring_data_tx);
-        print_data(item);
-        printf("\nRead size: %d\n", item->len);
-        hpt_set_read_item(dev->ring_info_tx);
-    }
-}
-
-void hpt_write(struct hpt *dev, uint8_t *data, size_t len)
-{
-    hpt_set_item(dev->ring_info_rx, dev->ring_buffer_items, dev->ring_data_rx, data, len);
-}
-
-
-/*void hpt_read(uint8_t *data)
-{
-    if(!data) return;
-
-    hpt_buffer_info_t *buffer_info = (hpt_buffer_info_t *)(data - HPT_START_OFFSET_READ);
-
-    STORE(&buffer_info->state_tx, HPT_BUFFER_TX_EMPTY);
+    return;
 }
 
 void hpt_write(uint8_t *data)
 {
-    if(!data) return;
-
-    hpt_buffer_info_t *buffer_info = (hpt_buffer_info_t *)(data - HPT_START_OFFSET_WRITE);
-
-    STORE(&buffer_info->state_rx, HPT_BUFFER_RX_READY);
-}
-
-
-static hpt_buffer_info_t* hpt_get_buffer(struct hpt *dev, const int flag)
-{
-    hpt_buffer_info_t *buffer_info;
-	size_t start = 0;
-    size_t end = dev->alloc_buffers_count;
-
-    pthread_mutex_lock(&dev->mutex);
-
-    for(int i = start; i < end; i++)
-    {
-        buffer_info = (hpt_buffer_info_t *)dev->buffers_combined[i];
-
-        if(!ACQUIRE(&buffer_info->in_use)) continue;
-        
-        if(flag)
-        {
-            if(ACQUIRE(&buffer_info->state_tx) != HPT_BUFFER_TX_READY) continue;
-            STORE(&buffer_info->state_tx, HPT_BUFFER_TX_BUSY);
-        }
-        else
-        {
-            if(ACQUIRE(&buffer_info->state_rx) != HPT_BUFFER_RX_EMPTY) continue;
-            STORE(&buffer_info->state_rx, HPT_BUFFER_RX_BUSY);
-        }
-        
-        pthread_mutex_unlock(&dev->mutex);
-
-        return buffer_info;
-    }
-    pthread_mutex_unlock(&dev->mutex);
-
-    return NULL;
+    return;
 }
 
 uint8_t* hpt_get_tx_buffer(struct hpt *dev) 
 { 
-    hpt_buffer_info_t *buffer_info = hpt_get_buffer(dev, 1);
+    struct hpt_ring_buffer_element *item;
 
-    if(buffer_info) 
-        return (uint8_t *)buffer_info + HPT_START_OFFSET_READ; 
+    item = hpt_get_item(dev->ring_info_tx, dev->ring_buffer_items, dev->ring_data_tx);
+    if(!item) return NULL;
 
-    return NULL;
+    print_data(item);
+    printf("\nRead size: %d\n", item->len);
+    hpt_set_read_item(dev->ring_info_tx);
+
+    return item->data;
 }
 
 uint8_t* hpt_get_rx_buffer(struct hpt *dev) 
 { 
-    hpt_buffer_info_t *buffer_info = hpt_get_buffer(dev, 0);
-
-    if(buffer_info) 
-        return (uint8_t *)buffer_info + HPT_START_OFFSET_WRITE;
-
-    return NULL;
+    return dev->ring_data_rx;
 }
 
-void hpt_set_rx_buffer_size(uint8_t* data, int size)
+void hpt_set_rx_buffer_size(uint8_t* data, size_t size)
 {
-    hpt_buffer_info_t *buffer_info = (hpt_buffer_info_t *)(data - HPT_START_OFFSET_WRITE);
-    buffer_info->size = size;
+    return;
 }
 
 int hpt_get_tx_buffer_size(uint8_t* data)
 {
-    hpt_buffer_info_t *buffer_info = (hpt_buffer_info_t *)(data - HPT_START_OFFSET_READ);
-    return buffer_info->size;
+    return 10;
 }
 
 int hpt_get_rx_buffer_size(uint8_t* data)
 {
-    hpt_buffer_info_t *buffer_info = (hpt_buffer_info_t *)(data - HPT_START_OFFSET_WRITE);
-    return buffer_info->size;
-}*/
+    return 10;
+}
