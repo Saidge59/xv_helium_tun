@@ -8,7 +8,7 @@
 * @brief fill_buffer: Fill the buffer with payload
 * @param pData: Pointer to the data to be written
 **************************************************************************************************/
-static void fill_buffer(uint8_t *pData);
+static void fill_buffer(uint8_t *pData, size_t *size);
 
 /**********************************************************************************************//**
 * @brief thread_write: Thread function for handling write operations
@@ -173,6 +173,8 @@ int hpt_run(struct hpt *dev)
 static void* thread_write(void* arg) 
 {
     struct hpt* dev = (struct hpt*)arg;
+    uint8_t data[2048];
+    size_t size;
 
     while(dev->isTread)
     {
@@ -183,15 +185,11 @@ static void* thread_write(void* arg)
                 break;
             case 'w': 
 
-            uint8_t *hpt_pkt = hpt_get_rx_buffer(dev);
+            fill_buffer(data, &size);
+            hpt_write(dev, data, size);
 
-            fill_buffer(hpt_pkt);
-
-             printf("hpt_pkt: 0x%02x\n", hpt_pkt[0]);
-            printf("Write size: %d\n\n", hpt_get_rx_buffer_size(hpt_pkt));
-            
-            hpt_write(hpt_pkt);
-            
+            printf("Write size: %ld\n\n", size);
+                        
             break;
         }
     }
@@ -199,16 +197,21 @@ static void* thread_write(void* arg)
     return NULL;
 }
 
+
+
+void on_hpt_packet(void *handle, uint8_t *msg_content, size_t length) 
+{
+    void *state = handle;
+
+    int i = 0;
+	while(i < length) { printf("%c", msg_content[i++]); }
+    printf("\nRead size: %ld\n", length);
+}
+
 static void on_hpt_event(uv_poll_t *handle, int status, int events)
 {
     struct hpt *dev = (struct hpt *)handle->data;
-
-    uint8_t *packet = hpt_get_tx_buffer(dev);
-    if (!packet) {
-        return;
-    }
-    size_t packet_size = hpt_get_tx_buffer_size(packet);
-    hpt_read(packet);
+    hpt_drain(dev, on_hpt_packet, NULL);
 }
 
 static uint16_t calculate_checksum(const uint8_t *data, size_t length) {
@@ -248,7 +251,7 @@ static uint16_t calculate_udp_checksum(const uint8_t *ip_header, const uint8_t *
     return ~sum;
 }
 
-static void fill_buffer(uint8_t *pData)
+static void fill_buffer(uint8_t *pData, size_t *size)
 {
     unsigned char ip_header[] = {
         0x45, 0x00, 0x00, 0x00,
@@ -287,9 +290,7 @@ static void fill_buffer(uint8_t *pData)
     udp_header[6] = (udp_checksum >> 8) & 0xFF;
     udp_header[7] = udp_checksum & 0xFF;
 
-    size_t length = sizeof(ip_header) + sizeof(udp_header) + PAYLOAD_SIZE;
-
-    hpt_set_rx_buffer_size(pData, length);
+    *size = sizeof(ip_header) + sizeof(udp_header) + PAYLOAD_SIZE;
 
     memcpy(pData, ip_header, sizeof(ip_header));
     memcpy(pData + sizeof(ip_header), udp_header, sizeof(udp_header));

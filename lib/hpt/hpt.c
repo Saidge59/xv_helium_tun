@@ -15,12 +15,6 @@
 
 #define PAGE_ALIGN(x) (((x) + sysconf(_SC_PAGESIZE) - 1) & ~(sysconf(_SC_PAGESIZE) - 1))
 
-static void print_data(struct hpt_ring_buffer_element *item)
-{	
-	int i = 0;
-	while(i < item->len) { printf("%c", item->data[i++]); }
-}
-
 int hpt_efd(struct hpt *dev)
 {
     return dev->fd;
@@ -122,46 +116,21 @@ end:
     return NULL;
 }
 
-void hpt_read(uint8_t *data)
+void hpt_drain(struct hpt *dev, hpt_do_pkt read_cb, void *handle)
 {
-    return;
-}
-
-void hpt_write(uint8_t *data)
-{
-    return;
-}
-
-uint8_t* hpt_get_tx_buffer(struct hpt *dev) 
-{ 
+	size_t num = hpt_count_items(dev->ring_info_tx);
     struct hpt_ring_buffer_element *item;
 
-    item = hpt_get_item(dev->ring_info_tx, dev->ring_buffer_items, dev->ring_data_tx);
-    if(!item) return NULL;
-
-    print_data(item);
-    printf("\nRead size: %d\n", item->len);
-    hpt_set_read_item(dev->ring_info_tx);
-
-    return item->data;
+    for(size_t j = 0; j < num; j++)
+    {
+        item = hpt_get_item(dev->ring_info_tx, dev->ring_buffer_items, dev->ring_data_tx);
+        if(!item) continue;
+        read_cb(handle, item->data, item->len);
+        hpt_set_read_item(dev->ring_info_tx);
+    }
 }
 
-uint8_t* hpt_get_rx_buffer(struct hpt *dev) 
-{ 
-    return dev->ring_data_rx;
-}
-
-void hpt_set_rx_buffer_size(uint8_t* data, size_t size)
+void hpt_write(struct hpt *dev, uint8_t *data, size_t len)
 {
-    return;
-}
-
-int hpt_get_tx_buffer_size(uint8_t* data)
-{
-    return 10;
-}
-
-int hpt_get_rx_buffer_size(uint8_t* data)
-{
-    return 10;
+    hpt_set_item(dev->ring_info_rx, dev->ring_buffer_items, dev->ring_data_rx, data, len);
 }

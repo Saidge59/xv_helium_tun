@@ -403,12 +403,12 @@ static int hpt_ioctl_create(struct file *file, struct net *net, uint32_t ioctl_n
 		goto clean_up;
 	}
 
-	/*ret = hpt_run_thread(dev_info);
+	ret = hpt_run_thread(dev_info);
 	if (ret != 0) {
 		pr_err("Couldn't start rx kernel thread: %i\n", ret);
 		unregister_netdevice(net_dev);
 		goto clean_up;
-	}*/
+	}
 	
 	file->private_data = dev_info;
 
