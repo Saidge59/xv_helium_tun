@@ -97,9 +97,6 @@ static int __init hpt_init(void);
 **************************************************************************************************/
 static void __exit hpt_exit(void);
 
-#define PAGES_PER_BLOCK 128
-#define DMA_BLOCK_SIZE (PAGES_PER_BLOCK * PAGE_SIZE)
-
 extern struct hpt_dev *hpt_device;
 
 /*static int hpt_preallocation_skb(struct hpt_net_device_info *dev_info)
@@ -270,6 +267,7 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	int ret = 0;
 	struct hpt_net_device_info *dev_info;
+	unsigned long pfn;
 	unsigned long size;
 	size_t min_size_memory;
 	size_t aligned_size;
@@ -285,10 +283,6 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 	}
 
 	min_size_memory = (2 * sizeof(struct hpt_ring_buffer)) + (2 * HPT_RB_ELEMENT_SIZE);
-	pr_err("The size requested is %zu, minimum size: %lu\n", size, min_size_memory);
-
-	if(vma)
-		pr_err("vma->vm_end %lu, vma->vm_start: %lu\n", vma->vm_end, vma->vm_start);
 
 	size = vma->vm_end - vma->vm_start;
 	if(size == 0 || size < min_size_memory) 
@@ -297,7 +291,6 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 		ret = -EINVAL;
 		goto end;
 	}
-
 
 	aligned_size = PAGE_ALIGN(size);
 	if(aligned_size != size)
@@ -314,6 +307,13 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 		goto end;
 	}
 
+	pfn = dev_info->dma_handle >> PAGE_SHIFT;
+	if (remap_pfn_range(vma, vma->vm_start, pfn, aligned_size, vma->vm_page_prot)) {
+		pr_err("Failed to remap DMA\n");
+		ret = -EIO;
+		goto end;
+	}
+
 	dev_info->ring_info_tx = (struct hpt_ring_buffer *)dev_info->ring_memory;
 	dev_info->ring_info_rx = dev_info->ring_info_tx + 1;
     dev_info->ring_data_tx = (uint8_t *)(dev_info->ring_info_rx + 1);
@@ -321,8 +321,6 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 
     pr_info("DMA memory successfully allocated and mapped\n");
 	dev_info->ring_memory_size = aligned_size;
-
-	return 0;
 
 end:
 	mutex_unlock(&hpt_device->device_mutex);
@@ -548,7 +546,7 @@ static int __init hpt_init(void)
         goto unregister_chrdev_region;
     }
 
-    hpt_device->class = class_create(HPT_DEVICE_NAME);
+    hpt_device->class = class_create(THIS_MODULE, HPT_DEVICE_NAME);
     if (IS_ERR(hpt_device->class)) {
         pr_err("Failed to create class\n");
         ret = PTR_ERR(hpt_device->class);

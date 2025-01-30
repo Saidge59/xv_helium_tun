@@ -106,8 +106,8 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
     dev->ring_data_tx = (uint8_t *)(dev->ring_info_rx + 1);
     dev->ring_data_rx = dev->ring_data_tx + (dev->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
 
-    printf("Memory mapped to user space at %p\n", ring_memory);
     printf("Memory mapped size %ld\n", aligned_size);
+    printf("Allocation buffers %ld\n", ring_buffer_items);
 
     return dev;
 

@@ -25,11 +25,13 @@ struct hpt_ring_buffer {
 	uint64_t write;
 	uint64_t read;
 }__attribute__((aligned(HPT_RB_ELEMENT_SIZE)));
+//__attribute((packed));
 
 struct hpt_ring_buffer_element {
 	uint16_t len;
 	uint8_t data[HPT_RB_ELEMENT_USABLE_SPACE];
 }__attribute__((aligned(HPT_RB_ELEMENT_SIZE)));
+//__attribute((packed));
 
 /**********************************************************************************************//**
 * @brief Structure to store the name and count buffers of a network device
@@ -100,7 +102,7 @@ static inline int hpt_set_item(struct hpt_ring_buffer *ring, size_t ring_buffer_
 {
 	struct hpt_ring_buffer_element *elem;
 
-	if(unlikely(!hpt_free_items(ring, ring_buffer_items)) || unlikely(len > HPT_RB_ELEMENT_USABLE_SPACE))
+	if(unlikely(!hpt_free_items(ring, ring_buffer_items || len > HPT_RB_ELEMENT_USABLE_SPACE)))
     {
 		return 1;
 	}
