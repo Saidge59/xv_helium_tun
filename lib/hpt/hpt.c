@@ -95,16 +95,15 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
         goto end;
     }
 
+    set_ring_offset(dev, 0);
+    
+        goto end;
+
     dev->ring_memory = ring_memory;
     dev->ring_memory_size = aligned_size;
 	dev->ring_buffer_items = ring_buffer_items;
 	strncpy(dev->name, name, HPT_NAMESIZE - 1);
 	dev->name[HPT_NAMESIZE - 1] = 0;
-
-    dev->ring_info_tx = (struct hpt_ring_buffer *)dev->ring_memory;
-	dev->ring_info_rx = dev->ring_info_tx + 1;
-    dev->ring_data_tx = (uint8_t *)(dev->ring_info_rx + 1);
-    dev->ring_data_rx = dev->ring_data_tx + (dev->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
 
     printf("Memory mapped to user space at %p\n", ring_memory);
     printf("Memory mapped size %ld\n", aligned_size);

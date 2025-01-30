@@ -248,8 +248,30 @@ static int hpt_release(struct inode *inode, struct file *file)
 		if(dev_info->ring_memory)
 		{
 			//vfree(dev_info->ring_memory);
-			dma_free_coherent(&hpt_device->pdev->dev, dev_info->ring_memory_size, dev_info->ring_memory, dev_info->dma_handle);
-			dev_info->ring_memory = NULL;
+			size_t blocks_size = DMA_BLOCK_SIZE;
+			size_t num_blocks = dev_info->ring_memory_size / DMA_BLOCK_SIZE;
+			size_t last_block_size = dev_info->ring_memory_size % DMA_BLOCK_SIZE;
+			if(last_block_size > 0) num_blocks++;
+
+			for(size_t j = 0; j < num_blocks; j++) 
+			{
+				if(j == (num_blocks - 1) && last_block_size > 0) blocks_size = last_block_size;
+
+				void *buffer = dev_info->ring_memory[j]; 
+    			dma_addr_t dma_handle = dev_info->dma_handle[j];
+				dma_free_coherent(&hpt_device->pdev->dev, blocks_size, buffer, dma_handle);
+			}
+
+			if(dev_info->ring_memory) 
+			{
+				vfree(dev_info->ring_memory);
+				dev_info->ring_memory = NULL;
+			}
+			if(dev_info->dma_handle) 
+			{
+				vfree(dev_info->dma_handle);
+				dev_info->dma_handle = NULL;
+			}
 		}
 
 		if(dev_info->net_dev)
@@ -270,9 +292,17 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	int ret = 0;
 	struct hpt_net_device_info *dev_info;
+    unsigned long pfn;
 	unsigned long size;
 	size_t min_size_memory;
 	size_t aligned_size;
+	size_t num_blocks;
+	size_t offset = 0;
+	size_t allocated_blocks = 0;
+	size_t blocks_size;
+	size_t last_block_size = 0;
+	dma_addr_t dma_handle;
+	void *buffer;
 
 	mutex_lock(&hpt_device->device_mutex);
 
@@ -283,6 +313,7 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 		ret = -EINVAL;
 		goto end;
 	}
+
 
 	min_size_memory = (2 * sizeof(struct hpt_ring_buffer)) + (2 * HPT_RB_ELEMENT_SIZE);
 	pr_err("The size requested is %zu, minimum size: %lu\n", size, min_size_memory);
@@ -307,22 +338,73 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 		goto end;
 	}
 
-	dev_info->ring_memory = dma_alloc_coherent(&hpt_device->pdev->dev, aligned_size, &dev_info->dma_handle, GFP_KERNEL);
-	if (!dev_info->ring_memory) {
-		pr_err("Failed to allocate DMA block %zu\n", aligned_size);
+	blocks_size = DMA_BLOCK_SIZE;
+	num_blocks = aligned_size / DMA_BLOCK_SIZE;
+	last_block_size = aligned_size % DMA_BLOCK_SIZE;
+	if(last_block_size > 0) num_blocks++;
+
+	pr_info("min_size_memory %zu\n", min_size_memory);
+	pr_info("aligned_size %zu\n", aligned_size);
+	pr_info("size %zu\n", size);
+	pr_info("num_blocks %zu\n", num_blocks);
+	pr_info("last_block_size %zu\n", last_block_size);
+	pr_info("sizeof(void *) %zu\n", sizeof(void *));
+	
+
+	dev_info->ring_memory = vzalloc(num_blocks * sizeof(void *));
+	dev_info->dma_handle = vzalloc(num_blocks * sizeof(dma_addr_t));
+
+	if (!dev_info->ring_memory || !dev_info->dma_handle) {
+		pr_err("Failed to allocate memory for tracking DMA buffers\n");
 		ret = -ENOMEM;
-		goto end;
+		goto free_memory;
+	}
+	
+	for(size_t i = 0; i < num_blocks; i++) 
+	{
+		if(i == (num_blocks - 1) && last_block_size > 0) blocks_size = last_block_size;
+		pr_info("--blocks_size %zu\n", blocks_size);
+
+		buffer = dma_alloc_coherent(&hpt_device->pdev->dev, blocks_size, &dma_handle, GFP_KERNEL);
+		if (!buffer) {
+			pr_err("Failed to allocate DMA block %zu\n", i);
+			ret = -ENOMEM;
+			goto free_dma;
+		}
+
+		dev_info->ring_memory[i] = buffer;
+		dev_info->dma_handle[i] = dma_handle;
+
+		allocated_blocks++;
+
+		pfn = dma_handle >> PAGE_SHIFT;
+		if (remap_pfn_range(vma, vma->vm_start + offset, pfn, blocks_size, vma->vm_page_prot)) {
+			pr_err("Failed to remap DMA block %zu\n", i);
+			ret = -EIO;
+			goto free_dma;
+		}
+
+		offset += blocks_size;
 	}
 
-	dev_info->ring_info_tx = (struct hpt_ring_buffer *)dev_info->ring_memory;
-	dev_info->ring_info_rx = dev_info->ring_info_tx + 1;
-    dev_info->ring_data_tx = (uint8_t *)(dev_info->ring_info_rx + 1);
-    dev_info->ring_data_rx = dev_info->ring_data_tx + (dev_info->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+	set_ring_offset(dev_info, 0);
 
     pr_info("DMA memory successfully allocated and mapped\n");
 	dev_info->ring_memory_size = aligned_size;
 
 	return 0;
+
+free_dma:
+	for(size_t j = 0; j < allocated_blocks; j++) 
+	{
+		buffer = dev_info->ring_memory[j]; 
+    	dma_handle = dev_info->dma_handle[j];
+		dma_free_coherent(&hpt_device->pdev->dev, blocks_size, dev_info->ring_memory[j], dma_handle);
+	}
+
+free_memory:
+	if(dev_info->ring_memory) vfree(dev_info->ring_memory);
+	if(dev_info->dma_handle) vfree(dev_info->dma_handle);
 
 end:
 	mutex_unlock(&hpt_device->device_mutex);

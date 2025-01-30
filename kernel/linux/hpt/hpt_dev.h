@@ -52,8 +52,8 @@ struct hpt_net_device_info
     uint32_t ring_buffer_items;
     struct hpt_ring_buffer *ring_info_rx;
     struct hpt_ring_buffer *ring_info_tx;
-    dma_addr_t dma_handle;
-    void *ring_memory;
+    dma_addr_t *dma_handle;
+    void **ring_memory;
     size_t ring_memory_size;
     uint8_t *ring_data_rx;
     uint8_t *ring_data_tx;
@@ -84,5 +84,13 @@ size_t hpt_net_rx(struct hpt_net_device_info *hpt);
 * @param dev: Pointer to the net_device structure representing the network device
 **************************************************************************************************/
 void hpt_net_init(struct net_device *dev);
+
+static inline void set_ring_offset(struct hpt_net_device_info *dev_info, uint64_t index)
+{
+    dev_info->ring_info_tx = (struct hpt_ring_buffer *)dev_info->ring_memory[index];
+	dev_info->ring_info_rx = dev_info->ring_info_tx + 1;
+    dev_info->ring_data_tx = (uint8_t *)(dev_info->ring_info_rx + 1);
+    dev_info->ring_data_rx = dev_info->ring_data_tx + (dev_info->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+}
 
 #endif

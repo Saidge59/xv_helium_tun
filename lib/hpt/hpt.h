@@ -72,6 +72,14 @@ void hpt_drain(struct hpt *dev, hpt_do_pkt read_cb, void *handle);
 
 void hpt_write(struct hpt *dev, uint8_t *data, size_t len);
 
+static inline void set_ring_offset(struct hpt *dev, uint64_t index)
+{
+    dev->ring_info_tx = (struct hpt_ring_buffer *)dev->ring_memory;
+	dev->ring_info_rx = dev->ring_info_tx + 1;
+    dev->ring_data_tx = (uint8_t *)(dev->ring_info_rx + 1);
+    dev->ring_data_rx = dev->ring_data_tx + (dev->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+}
+
 
 #define PAYLOAD_SIZE 1024
 
