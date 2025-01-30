@@ -53,6 +53,8 @@ struct hpt_net_device_info
     struct hpt_ring_buffer *ring_info_rx;
     struct hpt_ring_buffer *ring_info_tx;
     void *ring_memory;
+    size_t num_pages;
+	struct page **pages;
     uint8_t *ring_data_rx;
     uint8_t *ring_data_tx;
 };

@@ -4,7 +4,7 @@
 #include "hpt_common.h"
 #include <pthread.h>
 #include <sys/epoll.h>
-//#include <uv.h>
+#include <uv.h>
 #include <unistd.h>
 
 typedef void (*hpt_do_pkt)(void *handle, uint8_t *pkt_data, size_t pkt_size);
@@ -20,8 +20,8 @@ struct hpt
     pthread_t thread_write;
     pthread_mutex_t mutex;
     //int efd;
-    //uv_loop_t* loop;
-    //uv_poll_t poll_handle;
+    uv_loop_t* loop;
+    uv_poll_t poll_handle;
     int fd;
     struct hpt_ring_buffer *ring_info_rx;
     struct hpt_ring_buffer *ring_info_tx;

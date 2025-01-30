@@ -245,7 +245,15 @@ static int hpt_release(struct inode *inode, struct file *file)
 
 		if(dev_info->ring_memory)
 		{
-			vfree(dev_info->ring_memory);
+			vunmap(dev_info->ring_memory);
+
+			for (size_t j = 0; j < dev_info->num_pages; j++) {
+				if (dev_info->pages[j]) __free_page(dev_info->pages[j]);
+			}
+			
+			kfree(dev_info->pages);
+			
+			dev_info->pages = NULL;
 			dev_info->ring_memory = NULL;
 		}
 
@@ -288,38 +296,75 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 
 	size_t aligned_size = PAGE_ALIGN(num_ring_memory);
 
-	dev_info->ring_memory = vmalloc(aligned_size);
-	if(!dev_info->ring_memory) 
+	size_t num_pages = aligned_size / PAGE_SIZE;
+	struct page **pages;
+
+	pages = kmalloc_array(num_pages, sizeof(struct page *), GFP_KERNEL);
+	if(!pages) 
 	{
-		pr_err("Cannot allocate memory\n");
-		ret = -EINVAL;
+		pr_err("Cannot allocate page array\n");
+		ret = -ENOMEM;
 		goto end;
 	}
 
-	virt_addr = (unsigned long)dev_info->ring_memory;
-
-	for(size_t i = 0; i < aligned_size; i += PAGE_SIZE) 
+	for(size_t i = 0; i < num_pages; i++) 
 	{
-		pfn = vmalloc_to_pfn((void *)(virt_addr + i));
-
-		if (remap_pfn_range(vma, vma->vm_start + i, pfn, PAGE_SIZE, vma->vm_page_prot)) {
-			pr_err("Failed to remap vmalloc memory at offset %zu\n", i);
-			ret = -EIO;
-			goto end;
+		pages[i] = alloc_page(GFP_KERNEL);
+		if (!pages[i]) 
+		{
+			pr_err("Failed to allocate page %zu\n", i);
+			ret = -ENOMEM;
+			goto free_alloc_pages;
 		}
 	}
+
+	dev_info->ring_memory = vmap(pages, num_pages, VM_MAP, PAGE_KERNEL);
+	if(!dev_info->ring_memory) 
+	{
+		pr_err("vmap failed\n");
+		ret = -ENOMEM;
+		goto free_alloc_pages;
+	}
+
+	virt_addr = (unsigned long)dev_info->ring_memory;
+	for(size_t i = 0; i < aligned_size; i += PAGE_SIZE) 
+	{
+		pfn = page_to_pfn(pages[i / PAGE_SIZE]);
+		if(remap_pfn_range(vma, vma->vm_start + i, pfn, PAGE_SIZE, vma->vm_page_prot)) 
+		{
+			pr_err("Failed to remap memory at offset %zu\n", i);
+			ret = -EIO;
+			goto unmap_vmalloc;
+		}
+		//pr_info("Page %zu: vaddr=%p -> pfn=0x%lx\n", i / PAGE_SIZE, (void *)(virt_addr + i), pfn);
+	}
+
+	dev_info->pages = pages;
+	dev_info->num_pages = num_pages;
 
 	dev_info->ring_info_tx = (struct hpt_ring_buffer *)dev_info->ring_memory;
 	dev_info->ring_info_rx = dev_info->ring_info_tx + 1;
     dev_info->ring_data_tx = (uint8_t *)(dev_info->ring_info_rx + 1);
     dev_info->ring_data_rx = dev_info->ring_data_tx + (dev_info->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
 
-    pr_info("Memory mapped to user space at %lx\n", vma->vm_start);
+	pr_info("Allocated %zu bytes with vmap: %p\n", aligned_size, dev_info->ring_memory);
+
+	mutex_unlock(&hpt_device->device_mutex);
+	return 0;
+
+unmap_vmalloc:
+	vunmap(dev_info->ring_memory);
+
+free_alloc_pages:
+	for (size_t j = 0; j < num_pages; j++) 
+	{
+		if (pages[j]) __free_page(pages[j]);
+	}
+	kfree(pages);
 
 end:
 	mutex_unlock(&hpt_device->device_mutex);
-
-    return ret;
+	return ret;
 }
 
 static int hpt_ioctl_create(struct file *file, struct net *net, uint32_t ioctl_num, unsigned long ioctl_param)
@@ -476,7 +521,7 @@ static int __init hpt_init(void)
         goto unregister_chrdev_region;
     }
 
-    hpt_device->class = class_create(THIS_MODULE, HPT_DEVICE_NAME);
+    hpt_device->class = class_create(HPT_DEVICE_NAME);
     if (IS_ERR(hpt_device->class)) {
         pr_err("Failed to create class\n");
         ret = PTR_ERR(hpt_device->class);
