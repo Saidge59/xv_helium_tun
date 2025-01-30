@@ -97,10 +97,12 @@ static int __init hpt_init(void);
 **************************************************************************************************/
 static void __exit hpt_exit(void);
 
+#define PAGES_PER_BLOCK 128
+#define DMA_BLOCK_SIZE (PAGES_PER_BLOCK * PAGE_SIZE)
 
 extern struct hpt_dev *hpt_device;
 
-static int hpt_preallocation_skb(struct hpt_net_device_info *dev_info)
+/*static int hpt_preallocation_skb(struct hpt_net_device_info *dev_info)
 {
 	struct sk_buff *skb;
 	int size = HPT_BUFFER_HALF_SIZE;
@@ -138,7 +140,7 @@ static int hpt_free_skb(struct hpt_net_device_info *dev_info)
     }
 
     return 0;
-}
+}*/
 
 static int hpt_kernel_thread(void *param)
 {
@@ -155,7 +157,7 @@ static int hpt_kernel_thread(void *param)
             pr_info("Woke early due to signal.\n");
         } else {
 			hpt_net_rx(dev_info);
-			hpt_preallocation_skb(dev_info);
+			//hpt_preallocation_skb(dev_info);
         }
         
         if (kthread_should_stop())
@@ -241,11 +243,12 @@ static int hpt_release(struct inode *inode, struct file *file)
 
 		pr_info("Stopped pthread\n");
 
-		hpt_free_skb(dev_info);
+		//hpt_free_skb(dev_info);
 
 		if(dev_info->ring_memory)
 		{
-			vfree(dev_info->ring_memory);
+			//vfree(dev_info->ring_memory);
+			dma_free_coherent(&hpt_device->pdev->dev, dev_info->ring_memory_size, dev_info->ring_memory, dev_info->dma_handle);
 			dev_info->ring_memory = NULL;
 		}
 
@@ -267,6 +270,69 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	int ret = 0;
 	struct hpt_net_device_info *dev_info;
+	unsigned long size;
+	size_t min_size_memory;
+	size_t aligned_size;
+
+	mutex_lock(&hpt_device->device_mutex);
+
+	dev_info = file->private_data;
+	if(!dev_info)
+	{
+		pr_err("hpt_dev is null\n");
+		ret = -EINVAL;
+		goto end;
+	}
+
+	min_size_memory = (2 * sizeof(struct hpt_ring_buffer)) + (2 * HPT_RB_ELEMENT_SIZE);
+	pr_err("The size requested is %zu, minimum size: %lu\n", size, min_size_memory);
+
+	if(vma)
+		pr_err("vma->vm_end %lu, vma->vm_start: %lu\n", vma->vm_end, vma->vm_start);
+
+	size = vma->vm_end - vma->vm_start;
+	if(size == 0 || size < min_size_memory) 
+	{
+		pr_err("The size requested is %zu, minimum size: %lu\n", size, min_size_memory);
+		ret = -EINVAL;
+		goto end;
+	}
+
+
+	aligned_size = PAGE_ALIGN(size);
+	if(aligned_size != size)
+	{
+		pr_err("User didn't align the size memory %zu, aligned size: %zu\n", size, aligned_size);
+		ret = -EINVAL;
+		goto end;
+	}
+
+	dev_info->ring_memory = dma_alloc_coherent(&hpt_device->pdev->dev, aligned_size, &dev_info->dma_handle, GFP_KERNEL);
+	if (!dev_info->ring_memory) {
+		pr_err("Failed to allocate DMA block %zu\n", aligned_size);
+		ret = -ENOMEM;
+		goto end;
+	}
+
+	dev_info->ring_info_tx = (struct hpt_ring_buffer *)dev_info->ring_memory;
+	dev_info->ring_info_rx = dev_info->ring_info_tx + 1;
+    dev_info->ring_data_tx = (uint8_t *)(dev_info->ring_info_rx + 1);
+    dev_info->ring_data_rx = dev_info->ring_data_tx + (dev_info->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+
+    pr_info("DMA memory successfully allocated and mapped\n");
+	dev_info->ring_memory_size = aligned_size;
+
+	return 0;
+
+end:
+	mutex_unlock(&hpt_device->device_mutex);
+    return ret;
+}
+
+/*static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	int ret = 0;
+	struct hpt_net_device_info *dev_info;
     unsigned long pfn;
 	unsigned long size;
 	unsigned long num_ring_memory;
@@ -277,6 +343,12 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 	size = vma->vm_end - vma->vm_start;
 
 	dev_info = file->private_data;
+	if(!dev_info)
+	{
+		pr_err("hpt_dev is null\n");
+		ret = -EINVAL;
+		goto end;
+	}
 
 	num_ring_memory = (2 * sizeof(struct hpt_ring_buffer)) + (2 * dev_info->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
 	if(size < num_ring_memory) 
@@ -320,7 +392,7 @@ end:
 	mutex_unlock(&hpt_device->device_mutex);
 
     return ret;
-}
+}*/
 
 static int hpt_ioctl_create(struct file *file, struct net *net, uint32_t ioctl_num, unsigned long ioctl_param)
 {
@@ -396,12 +468,12 @@ static int hpt_ioctl_create(struct file *file, struct net *net, uint32_t ioctl_n
 
 	net_dev->needs_free_netdev = true;
 
-	ret = hpt_preallocation_skb(dev_info);
+	/*ret = hpt_preallocation_skb(dev_info);
 	if (ret != 0) {
 		pr_err("Failed to preallocation sk buffers\n");
 		unregister_netdevice(net_dev);
 		goto clean_up;
-	}
+	}*/
 
 	ret = hpt_run_thread(dev_info);
 	if (ret != 0) {
@@ -476,24 +548,41 @@ static int __init hpt_init(void)
         goto unregister_chrdev_region;
     }
 
-    hpt_device->class = class_create(THIS_MODULE, HPT_DEVICE_NAME);
+    hpt_device->class = class_create(HPT_DEVICE_NAME);
     if (IS_ERR(hpt_device->class)) {
         pr_err("Failed to create class\n");
         ret = PTR_ERR(hpt_device->class);
         goto del_cdev;
     }
 
-    hpt_device->device = device_create(hpt_device->class, NULL, hpt_device->devt, NULL, HPT_DEVICE_NAME);
+    hpt_device->pdev = platform_device_register_simple(HPT_DEVICE_NAME, -1, NULL, 0);
+    if (IS_ERR(hpt_device->pdev)) {
+        pr_err("Failed to register platform device\n");
+        ret = PTR_ERR(hpt_device->pdev);
+        goto destroy_class;
+    }
+
+    ret = dma_set_mask_and_coherent(&hpt_device->pdev->dev, DMA_BIT_MASK(64));
+    if (ret) {
+        pr_err("Failed to set DMA mask\n");
+        goto unregister_platform_device;
+    }
+
+    hpt_device->device = device_create(hpt_device->class, &hpt_device->pdev->dev,
+                                      hpt_device->devt, NULL, HPT_DEVICE_NAME);
     if (IS_ERR(hpt_device->device)) {
         pr_err("Failed to create device\n");
         ret = PTR_ERR(hpt_device->device);
-		goto destroy_class;
+        goto unregister_platform_device;
     }
 
 	mutex_init(&hpt_device->device_mutex);
 
     return 0;
 
+
+unregister_platform_device:
+    platform_device_unregister(hpt_device->pdev);
 destroy_class:
     class_destroy(hpt_device->class);
 del_cdev:
@@ -511,6 +600,7 @@ static void __exit hpt_exit(void)
 	if(hpt_device)
 	{
 		device_destroy(hpt_device->class, hpt_device->devt);
+		platform_device_unregister(hpt_device->pdev);
 		class_destroy(hpt_device->class);
 		cdev_del(&hpt_device->cdev);
 		unregister_chrdev_region(hpt_device->devt, 1);

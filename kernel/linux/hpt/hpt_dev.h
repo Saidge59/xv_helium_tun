@@ -52,7 +52,9 @@ struct hpt_net_device_info
     uint32_t ring_buffer_items;
     struct hpt_ring_buffer *ring_info_rx;
     struct hpt_ring_buffer *ring_info_tx;
+    dma_addr_t dma_handle;
     void *ring_memory;
+    size_t ring_memory_size;
     uint8_t *ring_data_rx;
     uint8_t *ring_data_tx;
 };
@@ -65,6 +67,7 @@ struct hpt_dev
     struct class *class;
     struct device *device;
     struct cdev cdev;
+    struct platform_device *pdev;
     dev_t devt;
     struct mutex device_mutex;
 };

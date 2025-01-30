@@ -85,7 +85,7 @@ static void hpt_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info
 
 struct hpt_dev *hpt_device;
 
-static struct sk_buff *hpt_get_sk_buffer(struct hpt_net_device_info *dev_info)
+/*static struct sk_buff *hpt_get_sk_buffer(struct hpt_net_device_info *dev_info)
 {
     struct sk_buff *skb;
 
@@ -99,7 +99,7 @@ static struct sk_buff *hpt_get_sk_buffer(struct hpt_net_device_info *dev_info)
 	}
 
     return skb;
-}
+}*/
 
 static int hpt_net_open(struct net_device *dev)
 {
@@ -195,7 +195,9 @@ size_t hpt_net_rx(struct hpt_net_device_info *dev_info)
         	continue;
         }
 
-		skb = hpt_get_sk_buffer(dev_info);
+		//skb = hpt_get_sk_buffer(dev_info);
+		skb = netdev_alloc_skb(net_dev, len);
+
         if(unlikely(!skb)) {
             net_dev->stats.rx_dropped++;
 			hpt_set_read_item(dev_info->ring_info_rx);

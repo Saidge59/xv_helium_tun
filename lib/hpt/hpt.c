@@ -29,7 +29,7 @@ void hpt_close(struct hpt *dev)
 {
 	if(!dev) return;
 
-    if(dev->ring_memory) munmap(dev->ring_memory, dev->size_memory);
+    if(dev->ring_memory) munmap(dev->ring_memory, dev->ring_memory_size);
 
     //if(dev->loop) uv_loop_close(dev->loop);
 
@@ -51,7 +51,7 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
     int ret;
     struct hpt *dev;
     struct hpt_net_device_param net_dev_info;
-    void* ring_memory;
+    void** ring_memory;
     size_t num_ring_memory;
 
     dev = malloc(sizeof(struct hpt));
@@ -96,12 +96,12 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
     }
 
     dev->ring_memory = ring_memory;
-    dev->size_memory = aligned_size;
+    dev->ring_memory_size = aligned_size;
 	dev->ring_buffer_items = ring_buffer_items;
 	strncpy(dev->name, name, HPT_NAMESIZE - 1);
 	dev->name[HPT_NAMESIZE - 1] = 0;
 
-    dev->ring_info_tx = (struct hpt_ring_buffer *)ring_memory;
+    dev->ring_info_tx = (struct hpt_ring_buffer *)dev->ring_memory;
 	dev->ring_info_rx = dev->ring_info_tx + 1;
     dev->ring_data_tx = (uint8_t *)(dev->ring_info_rx + 1);
     dev->ring_data_rx = dev->ring_data_tx + (dev->ring_buffer_items * HPT_RB_ELEMENT_SIZE);

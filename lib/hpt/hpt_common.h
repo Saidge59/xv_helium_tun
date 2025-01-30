@@ -24,12 +24,12 @@
 struct hpt_ring_buffer {
 	uint64_t write;
 	uint64_t read;
-};
+}__attribute__((aligned(HPT_RB_ELEMENT_SIZE)));
 
 struct hpt_ring_buffer_element {
 	uint16_t len;
 	uint8_t data[HPT_RB_ELEMENT_USABLE_SPACE];
-};
+}__attribute__((aligned(HPT_RB_ELEMENT_SIZE)));
 
 /**********************************************************************************************//**
 * @brief Structure to store the name and count buffers of a network device
