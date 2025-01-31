@@ -276,6 +276,8 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 		}
 	}
 
+	int nid = page_to_nid(pages[0]);
+
 	dev_info->ring_memory = vmap(pages, num_pages, VM_MAP, PAGE_KERNEL);
 	if(!dev_info->ring_memory) 
 	{
@@ -283,6 +285,8 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 		ret = -ENOMEM;
 		goto free_alloc_pages;
 	}
+
+	for(size_t i = 0; i < num_pages; i++) set_page_node(pages[i], nid);
 
 	virt_addr = (unsigned long)dev_info->ring_memory;
 	for(size_t i = 0; i < aligned_size; i += PAGE_SIZE) 
