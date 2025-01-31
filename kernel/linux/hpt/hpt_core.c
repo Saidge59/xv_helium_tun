@@ -100,45 +100,6 @@ static void __exit hpt_exit(void);
 
 extern struct hpt_dev *hpt_device;
 
-static int hpt_preallocation_skb(struct hpt_net_device_info *dev_info)
-{
-	struct sk_buff *skb;
-	int size = HPT_BUFFER_HALF_SIZE;
-
-    for(int i = 0; i < HPT_SKB_COUNT; i++) 
-	{
-		skb = dev_info->sk_buffers[i];
-		if(!skb)
-		{
-			skb = netdev_alloc_skb(dev_info->net_dev, size);
-			if (!skb) {
-				pr_err("Failed to allocate SKB\n");
-				return -ENOMEM;
-			}
-
-			dev_info->sk_buffers[i] = skb;
-		}
-    }
-
-    return 0;
-}
-
-static int hpt_free_skb(struct hpt_net_device_info *dev_info)
-{
-	struct sk_buff *skb;
-
-    for(int i = 0; i < HPT_SKB_COUNT; i++) 
-	{
-		skb = dev_info->sk_buffers[i];
-		if(skb)
-		{
-			dev_kfree_skb(skb);
-			dev_info->sk_buffers[i] = NULL;
-		}
-    }
-
-    return 0;
-}
 
 static int hpt_kernel_thread(void *param)
 {
@@ -155,7 +116,6 @@ static int hpt_kernel_thread(void *param)
             pr_info("Woke early due to signal.\n");
         } else {
 			hpt_net_rx(dev_info);
-			hpt_preallocation_skb(dev_info);
         }
         
         if (kthread_should_stop())
@@ -241,8 +201,6 @@ static int hpt_release(struct inode *inode, struct file *file)
 
 		pr_info("Stopped pthread\n");
 
-		hpt_free_skb(dev_info);
-
 		if(dev_info->ring_memory)
 		{
 			vunmap(dev_info->ring_memory);
@@ -250,7 +208,7 @@ static int hpt_release(struct inode *inode, struct file *file)
 			for (size_t j = 0; j < dev_info->num_pages; j++) {
 				if (dev_info->pages[j]) __free_page(dev_info->pages[j]);
 			}
-			
+
 			kfree(dev_info->pages);
 			
 			dev_info->pages = NULL;
@@ -441,13 +399,6 @@ static int hpt_ioctl_create(struct file *file, struct net *net, uint32_t ioctl_n
 
 	net_dev->needs_free_netdev = true;
 
-	ret = hpt_preallocation_skb(dev_info);
-	if (ret != 0) {
-		pr_err("Failed to preallocation sk buffers\n");
-		unregister_netdevice(net_dev);
-		goto clean_up;
-	}
-
 	ret = hpt_run_thread(dev_info);
 	if (ret != 0) {
 		pr_err("Couldn't start rx kernel thread: %i\n", ret);
@@ -521,7 +472,7 @@ static int __init hpt_init(void)
         goto unregister_chrdev_region;
     }
 
-    hpt_device->class = class_create(HPT_DEVICE_NAME);
+    hpt_device->class = class_create(THIS_MODULE, HPT_DEVICE_NAME);
     if (IS_ERR(hpt_device->class)) {
         pr_err("Failed to create class\n");
         ret = PTR_ERR(hpt_device->class);

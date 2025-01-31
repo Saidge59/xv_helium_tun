@@ -47,7 +47,6 @@ struct hpt_net_device_info
 	char name[HPT_NAMESIZE];
 	struct task_struct *pthread;
 	struct net_device *net_dev;
-    struct sk_buff *sk_buffers[HPT_SKB_COUNT];
     wait_queue_head_t tx_busy;
     uint32_t ring_buffer_items;
     struct hpt_ring_buffer *ring_info_rx;
