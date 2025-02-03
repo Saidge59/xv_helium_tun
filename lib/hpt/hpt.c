@@ -85,7 +85,7 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
         goto end;
 	}
 
-	num_ring_memory = (2 * sizeof(struct hpt_ring_buffer)) + (2 * ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+	num_ring_memory = 2 * ring_buffer_items * HPT_RB_ELEMENT_SIZE;
     size_t aligned_size = PAGE_ALIGN(num_ring_memory);
 
     ring_memory = mmap(NULL, aligned_size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd, 0);
@@ -132,5 +132,13 @@ void hpt_drain(struct hpt *dev, hpt_do_pkt read_cb, void *handle)
 
 void hpt_write(struct hpt *dev, uint8_t *data, size_t len)
 {
-    hpt_set_item(dev->ring_info_rx, dev->ring_buffer_items, dev->ring_data_rx, data, len);
+	if(likely(hpt_set_item(dev_info->ring_info_rx, dev_info->ring_buffer_items, dev_info->ring_data_rx, data, len) != 0))
+    {
+        return;
+    } 
+    else
+    {
+        struct hpt_ring_buffer *ring_info = dev_info->ring_info_rx;
+		STORE(&ring_info->write, ACQUIRE(&ring_info->write) + 1);	
+    }
 }

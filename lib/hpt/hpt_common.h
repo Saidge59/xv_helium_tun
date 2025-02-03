@@ -21,11 +21,14 @@
 #define HPT_RB_ELEMENT_PADDING (HPT_RB_ELEMENT_SIZE - (2 * sizeof(uint64_t)))
 #define HPT_MTU 1350
 #define HPT_MAX_ITEMS 65536
+#define PAGES_PER_BLOCK 1024
 
 struct hpt_ring_buffer {
-	uint64_t write;
-	uint64_t read;
-	uint8_t data[HPT_RB_ELEMENT_PADDING];
+	uint32_t write;
+	uint32_t read;
+	uint32_t block_ind;
+	uint32_t max_block_ind;
+	uint32_t min_block_ind;
 };
 
 struct hpt_ring_buffer_element {
@@ -70,15 +73,6 @@ static inline uint64_t hpt_free_items(struct hpt_ring_buffer *ring, size_t ring_
 	return ring_buffer_items - hpt_count_items(ring);
 }
 
-static inline struct hpt_ring_buffer_element *hpt_get_start_item(uint8_t *start, size_t item, size_t ring_buffer_items)
-{
-    item = item % ring_buffer_items;
-
-	start += (HPT_RB_ELEMENT_SIZE * item);
-
-	return (struct hpt_ring_buffer_element *)start;
-}
-
 static inline struct hpt_ring_buffer_element *hpt_get_item(struct hpt_ring_buffer *ring, size_t ring_buffer_items, uint8_t *start_read)
 {
 	struct hpt_ring_buffer_element *elem;
@@ -88,7 +82,8 @@ static inline struct hpt_ring_buffer_element *hpt_get_item(struct hpt_ring_buffe
 		return NULL;
 	}
 
-	elem = hpt_get_start_item(start_read, ACQUIRE(&ring->read), ring_buffer_items);
+	elem = start_read + (HPT_RB_ELEMENT_SIZE * ACQUIRE(&ring->read));
+	if(!elem) return NULL;
 
 	if(unlikely(elem->len > HPT_RB_ELEMENT_USABLE_SPACE)) 
     {
@@ -107,12 +102,11 @@ static inline int hpt_set_item(struct hpt_ring_buffer *ring, size_t ring_buffer_
 		return 1;
 	}
 
-	elem = hpt_get_start_item(start_write, ACQUIRE(&ring->write), ring_buffer_items);
+	elem = start_write + (HPT_RB_ELEMENT_SIZE * ACQUIRE(&ring->write));
+	if(!elem) return 0;
 
 	elem->len = len;
 	memcpy(elem->data, data, len);
-	
-	STORE(&ring->write, ACQUIRE(&ring->write) + 1);
 
 	return 0;
 }
@@ -124,7 +118,14 @@ static inline void hpt_set_read_item(struct hpt_ring_buffer *ring)
 		return;
 	}
 
-	STORE(&ring->read, ACQUIRE(&ring->read) + 1);
+	uint32_t ind = ACQUIRE(&ring->read) + 1;
+	if(ind >= PAGES_PER_BLOCK) 
+	{
+		STORE(&ring->read, 0);
+		return;
+	}
+
+	STORE(&ring->read, ind);
 }
 
 #endif

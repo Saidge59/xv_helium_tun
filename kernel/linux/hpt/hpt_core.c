@@ -203,15 +203,15 @@ static int hpt_release(struct inode *inode, struct file *file)
 
 		if(dev_info->ring_memory)
 		{
-			vunmap(dev_info->ring_memory);
-
-			for (size_t j = 0; j < dev_info->num_pages; j++) {
-				if (dev_info->pages[j]) __free_page(dev_info->pages[j]);
+			for(size_t b = 0; b < dev_info->num_blocks; b++) 
+			{
+				if(dev_info->pages_memory[b])
+				{
+					__free_pages(virt_to_page(dev_info->pages_memory[b]), dev_info->order);
+				}
 			}
-
-			kfree(dev_info->pages);
 			
-			dev_info->pages = NULL;
+			dev_info->pages_memory = NULL;
 			dev_info->ring_memory = NULL;
 		}
 
@@ -230,6 +230,109 @@ static int hpt_release(struct inode *inode, struct file *file)
 }
 
 static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	int ret = 0;
+	struct hpt_net_device_info *dev_info;
+    unsigned long pfn;
+	unsigned long size;
+	unsigned long num_ring_memory;
+	unsigned long virt_addr;
+
+	mutex_lock(&hpt_device->device_mutex);
+
+	size = vma->vm_end - vma->vm_start;
+
+	dev_info = file->private_data;
+
+	num_ring_memory = 2 * dev_info->ring_buffer_items * HPT_RB_ELEMENT_SIZE;
+	if(size < num_ring_memory) 
+	{
+		pr_info("User requested mmap size: %lu, kernel size: %lu\n", size, num_ring_memory);
+		ret = -EINVAL;
+		goto end;
+	}
+
+	size_t aligned_size = PAGE_ALIGN(num_ring_memory);
+	size_t num_pages = aligned_size / PAGE_SIZE;
+	size_t num_blocks = num_pages / PAGES_PER_BLOCK;
+
+	size_t order = get_order(PAGES_PER_BLOCK * PAGE_SIZE);
+
+	for(size_t b = 0; b < num_blocks; b++) 
+	{
+		struct page *page = alloc_pages(GFP_KERNEL, order);
+		if (!page) {
+			pr_err("Cannot allocate memory block %zu\n", b);
+			ret = -ENOMEM;
+			goto free_memory;
+		}
+
+		dev_info->pages_memory[b] = page_address(page);
+		phys_addr_t phys_base = page_to_phys(page);
+		
+		pr_info("Block %zu: vaddr=%px, pa=0x%llx\n", b, dev_info->pages_memory[b], (unsigned long long)phys_base);
+
+		for(size_t i = 0; i < PAGES_PER_BLOCK; i++) 
+		{
+			phys_addr_t pa = phys_base + (i * PAGE_SIZE);
+			unsigned long pfn = PHYS_PFN(pa);
+
+			if(remap_pfn_range(vma, vma->vm_start + (b * PAGES_PER_BLOCK + i) * PAGE_SIZE, pfn, PAGE_SIZE, vma->vm_page_prot)) 
+			{
+				pr_err("Failed to remap block %zu page %zu\n", b, i);
+				ret = -EIO;
+				goto free_memory;
+			}
+
+			pr_info("Page %zu-%zu: vaddr=%px, pa=0x%llx, pfn=0x%lx\n", 
+					b, i, dev_info->pages_memory[b] + (i * PAGE_SIZE), 
+					(unsigned long long)pa, pfn);
+		}
+	}
+
+	dev_info->order = order;
+	dev_info->num_blocks = num_blocks;
+
+	size_t block_ind_tx = 0;
+	size_t block_ind_rx = (num_blocks >> 1) - 1;
+
+	uint8_t *ring_info_tx = (uint8_t *)dev_info->pages_memory[block_ind_tx] + PAGE_SIZE - sizeof(struct hpt_ring_buffer);
+	uint8_t *ring_info_rx = (uint8_t *)dev_info->pages_memory[block_ind_rx] + PAGE_SIZE - sizeof(struct hpt_ring_buffer);
+	
+	dev_info->ring_info_tx = (struct hpt_ring_buffer *)ring_info_tx;
+	dev_info->ring_info_rx = (struct hpt_ring_buffer *)ring_info_rx;
+    dev_info->ring_data_tx = (uint8_t *)dev_info->pages_memory[block_ind_tx];
+    dev_info->ring_data_rx = (uint8_t *)dev_info->pages_memory[block_ind_rx];
+
+	memset(dev_info->ring_info_tx, 0, sizeof(struct hpt_ring_buffer));
+	memset(dev_info->ring_info_rx, 0, sizeof(struct hpt_ring_buffer));
+
+	dev_info->ring_info_rx->block_ind = block_ind_rx;
+	dev_info->ring_data_rx->min_block_ind = block_ind_rx + 1;
+	dev_info->ring_data_rx->max_block_ind = num_blocks;
+	dev_info->ring_data_tx->min_block_ind = 0;
+	dev_info->ring_data_tx->max_block_ind = num_blocks >> 1;
+
+	pr_info("Allocated %zu bytes with vmap: %p\n", aligned_size, dev_info->ring_memory);
+
+	mutex_unlock(&hpt_device->device_mutex);
+	return 0;
+
+unmap_vmalloc:
+	for(size_t b = 0; b < num_blocks; b++) 
+	{
+    	if(dev_info->pages_memory[b])
+		{
+        	__free_pages(virt_to_page(dev_info->pages_memory[b]), order);
+		}
+	}
+
+end:
+	mutex_unlock(&hpt_device->device_mutex);
+	return ret;
+}
+
+/*static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	int ret = 0;
 	struct hpt_net_device_info *dev_info;
@@ -327,7 +430,7 @@ free_alloc_pages:
 end:
 	mutex_unlock(&hpt_device->device_mutex);
 	return ret;
-}
+}*/
 
 static int hpt_ioctl_create(struct file *file, struct net *net, uint32_t ioctl_num, unsigned long ioctl_param)
 {

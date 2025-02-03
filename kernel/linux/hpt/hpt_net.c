@@ -127,9 +127,27 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 		goto drop;
 	}
 
+
+
 	if(likely(hpt_set_item(dev_info->ring_info_tx, dev_info->ring_buffer_items, dev_info->ring_data_tx, skb->data, len) != 0))
 	{
 		goto drop;
+	}
+	else
+	{
+		struct hpt_ring_buffer *ring_info = dev_info->ring_info_tx;
+		uint32_t ind = ACQUIRE(&ring_info->write) + 1;
+
+		if(ind < PAGES_PER_BLOCK) 
+		{
+			STORE(&ring_info->write, ind);
+		}
+		else
+		{
+			if(++ring_info->block_ind >= ring_info->max_block_ind) ring_info->block_ind = 0;
+
+			STORE(&ring_info->write, 0);
+		}		
 	}
 
 	dev_kfree_skb(skb);
