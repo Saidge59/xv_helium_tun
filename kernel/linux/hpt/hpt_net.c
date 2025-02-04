@@ -171,14 +171,6 @@ size_t hpt_net_rx(struct hpt_net_device_info *dev_info)
 
 		len = item->len;
 
-		if(unlikely(len == 0 || len > HPT_RB_ELEMENT_USABLE_SPACE)) 
-		{
-		    net_dev->stats.rx_dropped++;
-			hpt_set_read_item(dev_info->ring_info_rx);
-			pr_err("Drop packets that are len out of range\n");
-        	continue;
-        }
-
 		skb = netdev_alloc_skb(net_dev, len);
         if(unlikely(!skb)) {
             net_dev->stats.rx_dropped++;

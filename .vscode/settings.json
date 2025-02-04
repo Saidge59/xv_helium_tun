@@ -17,6 +17,7 @@
         "stdio.h": "c",
         "time.h": "c",
         "stdint.h": "c",
-        "pthread.h": "c"
+        "pthread.h": "c",
+        "string.h": "c"
     }
 }

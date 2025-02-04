@@ -54,6 +54,12 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
     void* ring_memory;
     size_t num_ring_memory;
 
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size == -1) {
+        perror("sysconf");
+        return NULL;
+    }
+
     dev = malloc(sizeof(struct hpt));
     if(!dev)
     {
@@ -85,7 +91,7 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
         goto end;
 	}
 
-	num_ring_memory = (2 * sizeof(struct hpt_ring_buffer)) + (2 * ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+	num_ring_memory = 2 * ring_buffer_items * HPT_RB_ELEMENT_SIZE;
     size_t aligned_size = PAGE_ALIGN(num_ring_memory);
 
     ring_memory = mmap(NULL, aligned_size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd, 0);
@@ -101,10 +107,12 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items)
 	strncpy(dev->name, name, HPT_NAMESIZE - 1);
 	dev->name[HPT_NAMESIZE - 1] = 0;
 
-    dev->ring_info_tx = (struct hpt_ring_buffer *)ring_memory;
+    uint8_t *start_ring_info = ((uint8_t *)dev->ring_memory) + page_size - (2 * sizeof(struct hpt_ring_buffer));
+	
+	dev->ring_info_tx = (struct hpt_ring_buffer *)start_ring_info;
 	dev->ring_info_rx = dev->ring_info_tx + 1;
-    dev->ring_data_tx = (uint8_t *)(dev->ring_info_rx + 1);
-    dev->ring_data_rx = dev->ring_data_tx + (dev->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
+    dev->ring_data_tx = (uint8_t *)(dev->ring_memory);
+    dev->ring_data_rx = (uint8_t *)(dev->ring_memory) + (dev->ring_buffer_items * HPT_RB_ELEMENT_SIZE);
 
     printf("Memory mapped to user space at %p\n", ring_memory);
     printf("Memory mapped size %ld\n", aligned_size);

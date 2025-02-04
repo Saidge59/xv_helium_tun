@@ -38,6 +38,7 @@
 #define HPT_BUFFER_SIZE 4096
 #define HPT_BUFFER_HALF_SIZE (HPT_BUFFER_SIZE >> 1)
 #define HPT_SKB_COUNT 1024
+#define PAGES_PER_BLOCK 1024
 
 /**********************************************************************************************//**
 * @brief Structure containing information about a network device
@@ -54,6 +55,7 @@ struct hpt_net_device_info
     void *ring_memory;
     size_t num_pages;
 	struct page **pages;
+    phys_addr_t *phys_base;
     uint8_t *ring_data_rx;
     uint8_t *ring_data_tx;
 };

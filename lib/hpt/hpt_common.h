@@ -17,15 +17,13 @@
 
 #define HPT_NAMESIZE 32
 #define HPT_RB_ELEMENT_SIZE 2048
-#define HPT_RB_ELEMENT_USABLE_SPACE (HPT_RB_ELEMENT_SIZE - sizeof(uint16_t))
-#define HPT_RB_ELEMENT_PADDING (HPT_RB_ELEMENT_SIZE - (2 * sizeof(uint64_t)))
+#define HPT_RB_ELEMENT_USABLE_SPACE (HPT_RB_ELEMENT_SIZE - (4 * sizeof(uint64_t)) - sizeof(uint16_t))
 #define HPT_MTU 1350
 #define HPT_MAX_ITEMS 65536
 
 struct hpt_ring_buffer {
 	uint64_t write;
 	uint64_t read;
-	uint8_t data[HPT_RB_ELEMENT_PADDING];
 };
 
 struct hpt_ring_buffer_element {
