@@ -166,7 +166,7 @@ size_t hpt_net_rx(struct hpt_net_device_info *dev_info)
 		item = hpt_get_item(dev_info->ring_info_rx, dev_info->ring_buffer_items, dev_info->ring_data_rx);
 		if(unlikely(!item)) 
 		{
-			break;
+			continue;
 		}
 
 		len = item->len;

@@ -104,6 +104,7 @@ extern struct hpt_dev *hpt_device;
 static int hpt_kernel_thread(void *param)
 {
 	struct hpt_net_device_info *dev_info = param;
+	if(!dev_info) return 0;
 	ktime_t waittime = ktime_set(0, SLEEP_NS);
 
 	pr_info("Kernel RX thread %s started!\n", dev_info->name);

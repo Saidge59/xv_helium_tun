@@ -81,11 +81,6 @@ static inline struct hpt_ring_buffer_element *hpt_get_item(struct hpt_ring_buffe
 {
 	struct hpt_ring_buffer_element *elem;
 
-	if(unlikely(!hpt_count_items(ring))) 
-    {
-		return NULL;
-	}
-
 	elem = hpt_get_start_item(start_read, ACQUIRE(&ring->read), ring_buffer_items);
 
 	if(unlikely(elem->len > HPT_RB_ELEMENT_USABLE_SPACE)) 
@@ -117,11 +112,6 @@ static inline int hpt_set_item(struct hpt_ring_buffer *ring, size_t ring_buffer_
 
 static inline void hpt_set_read_item(struct hpt_ring_buffer *ring)
 {
-	if(unlikely(!hpt_count_items(ring))) 
-    {
-		return;
-	}
-
 	STORE(&ring->read, ACQUIRE(&ring->read) + 1);
 }
 
