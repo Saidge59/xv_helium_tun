@@ -315,7 +315,7 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 
 	int nid = page_to_nid(pages[0]);
 
-	dev_info->ring_memory = vmap(pages, num_pages, VM_MAP, PAGE_KERNEL_NOCACHE);
+	dev_info->ring_memory = vmap(pages, num_pages, VM_MAP, PAGE_KERNEL);
 	if(!dev_info->ring_memory) 
 	{
 		pr_err("vmap failed\n");
