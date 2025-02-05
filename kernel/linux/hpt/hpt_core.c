@@ -208,17 +208,26 @@ static int hpt_release(struct inode *inode, struct file *file)
         	dev_info->ring_memory = NULL;
 		}
 
-		if(dev_info->pages) 
+		if(dev_info->vp_blocks)
 		{
-			for(size_t i = 0; i < dev_info->num_pages; i++) __free_page(dev_info->pages[i]);
-			kfree(dev_info->pages);
-			dev_info->pages = NULL;
+			for(size_t i = 0; i < dev_info->num_blocks; i++) 
+			{
+				struct vp_block *vp_block = dev_info->vp_blocks[i];
+				if(vp_block->virt) 
+				{
+					dma_free_coherent(&hpt_device->pdev->dev, BLOCK_SIZE, vp_block->virt, vp_block->phys);
+				}
+				kfree(vp_block);
+				vp_block = NULL;
+			}
+			kfree(dev_info->vp_blocks);
+			dev_info->vp_blocks = NULL;
 		}
 
-		if(dev_info->phys_base) 
+		if(dev_info->pages) 
 		{
-			kfree(dev_info->phys_base);
-			dev_info->phys_base = NULL;
+			kfree(dev_info->pages);
+			dev_info->pages = NULL;
 		}
 
 		if(dev_info->net_dev)
@@ -242,10 +251,8 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
     unsigned long pfn;
 	unsigned long size;
 	unsigned long num_ring_memory;
-	unsigned long virt_addr;
-	struct page *page;
 	struct page **pages;
-	phys_addr_t *phys_base;
+	struct vp_block **vp_blocks;
 
 	mutex_lock(&hpt_device->device_mutex);
 
@@ -265,9 +272,9 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 	size_t num_pages = aligned_size / PAGE_SIZE;
 	size_t num_blocks = num_pages / PAGES_PER_BLOCK;
 	size_t chunk = num_pages % PAGES_PER_BLOCK;
-	size_t order = get_order(PAGES_PER_BLOCK * PAGE_SIZE);
+	size_t block_size = PAGES_PER_BLOCK * PAGE_SIZE;
 
-	pr_info("num_pages %zu, num_blocks %zu, order %zu\n", num_pages, num_blocks, order);
+	pr_info("num_pages %zu, num_blocks %zu\n", num_pages, num_blocks);
 
 	if(chunk > 0)
 	{
@@ -276,10 +283,10 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 		goto end;
 	}
 
-	phys_base = kcalloc(num_pages, sizeof(phys_addr_t), GFP_KERNEL);
-	if(!phys_base) 
+	vp_blocks = kcalloc(num_blocks, sizeof(struct vp_block *), GFP_KERNEL);
+	if(!vp_blocks) 
 	{
-		pr_err("Cannot allocate phys_base\n");
+		pr_err("Cannot allocate vp_blocks\n");
 		ret = -ENOMEM;
 		goto end;
 	}
@@ -289,59 +296,52 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 	{
 		pr_err("Cannot allocate page array\n");
 		ret = -ENOMEM;
-		goto free_phys_base;
+		goto free_vp_blocks;
 	}
 
-	for(size_t b = 0; b < num_blocks; b++) 
+	for(size_t i = 0; i < num_blocks; i++) 
 	{
-		page = alloc_pages(GFP_KERNEL, order);
-		if(!page) 
-		{
-			pr_err("Cannot allocate memory block %zu\n", b);
+		vp_blocks[i] = kzalloc(sizeof(struct vp_block), GFP_KERNEL);
+		if (!vp_blocks[i]) {
+			pr_err("Failed to allocate memory for vp_block[%zu]\n", i);
 			ret = -ENOMEM;
-			goto free_alloc_pages;
+			goto free_dma_and_pages;
 		}
 
-		for(size_t i = 0; i < PAGES_PER_BLOCK; i++)
+		struct vp_block *vp_block = vp_blocks[i];
+		vp_block->virt = dma_alloc_coherent(&hpt_device->pdev->dev, block_size, &vp_block->phys, GFP_KERNEL);
+		if (!vp_block->virt) {
+			pr_err("dma_alloc_coherent failed for block %zu\n", i);
+			goto free_dma_and_pages;
+		}
+
+		pfn = PHYS_PFN(vp_block->phys);
+
+    	for(size_t j = 0; j < PAGES_PER_BLOCK; j++) 
 		{
-			size_t ind = (b * PAGES_PER_BLOCK) + i;
-			struct page *p = page + i;
-
-			pages[ind] = p;
-			phys_base[ind] = page_to_phys(p);
+			pages[(i * PAGES_PER_BLOCK) + j] = pfn_to_page(pfn + j);
 		}
-		
-	}
 
-	int nid = page_to_nid(pages[0]);
+		if(remap_pfn_range(vma, vma->vm_start + (i * block_size), pfn, block_size, vma->vm_page_prot)) 
+		{
+			pr_err("Failed to remap memory at offset %zu\n", i);
+			ret = -EIO;
+			goto free_dma_and_pages;
+		}
+		pr_info("Block %zu: vaddr=%px, paddr=0x%llx, pfn=0x%lx\n", i,  vp_block->virt, (unsigned long long)vp_block->phys, pfn);
+	}
 
 	dev_info->ring_memory = vmap(pages, num_pages, VM_MAP, PAGE_KERNEL);
 	if(!dev_info->ring_memory) 
 	{
 		pr_err("vmap failed\n");
 		ret = -ENOMEM;
-		goto free_alloc_pages;
+		goto free_dma_and_pages;
 	}
 
-	virt_addr = (unsigned long)dev_info->ring_memory;
-
-	for(size_t i = 0; i < num_pages; i++) 
-	{
-		set_page_node(pages[i], nid);
-      	pfn = PHYS_PFN(phys_base[i]);
-
-		if(remap_pfn_range(vma, vma->vm_start + (i * PAGE_SIZE), pfn, PAGE_SIZE, vma->vm_page_prot)) 
-		{
-			pr_err("Failed to remap memory at offset %zu\n", i);
-			ret = -EIO;
-			goto unmap_vmalloc;
-		}
-		//pr_info("Page %zu: vaddr=%px, pa=0x%llx, pfn=0x%lx\n", i,  (void *)(virt_addr + i), (unsigned long long)phys_base[i], pfn);
-	}
-
-	dev_info->num_pages = num_pages;
+	dev_info->num_blocks = num_blocks;
 	dev_info->pages = pages;
-	dev_info->phys_base = phys_base;
+	dev_info->vp_blocks = vp_blocks;
 
 	uint8_t *start_ring_info = ((uint8_t *)dev_info->ring_memory) + PAGE_SIZE - (2 * sizeof(struct hpt_ring_buffer));
 	
@@ -354,24 +354,32 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 
 	goto end;
 
-unmap_vmalloc:
-	if(dev_info->ring_memory) 
+free_dma_and_pages:
+	if(vp_blocks)
 	{
-        vunmap(dev_info->ring_memory);
-        dev_info->ring_memory = NULL;
-    }
+		for(size_t i = 0; i < num_blocks; i++) 
+		{
+			struct vp_block *vp_block = vp_blocks[i];
+			if(vp_block->virt) 
+			{
+				dma_free_coherent(&hpt_device->pdev->dev, BLOCK_SIZE, vp_block->virt, vp_block->phys);
+			}
+			kfree(vp_block);
+			vp_block = NULL;
+		}
+		kfree(vp_blocks);
+		vp_blocks = NULL;
+	}
 
-free_alloc_pages:
 	if(pages) 
 	{
-		for(size_t i = 0; i < num_pages; i++) __free_page(pages[i]);
         kfree(pages);
 		pages = NULL;
     }
 
-free_phys_base:
-	kfree(phys_base);
-	phys_base = NULL;
+free_vp_blocks:
+	kfree(vp_blocks);
+	vp_blocks = NULL;
 
 end:
 	mutex_unlock(&hpt_device->device_mutex);
@@ -532,19 +540,34 @@ static int __init hpt_init(void)
         goto del_cdev;
     }
 
-    hpt_device->device = device_create(hpt_device->class, NULL, hpt_device->devt, NULL, HPT_DEVICE_NAME);
+	hpt_device->pdev = platform_device_register_simple(HPT_DEVICE_NAME, -1, NULL, 0); 
+    if (IS_ERR(hpt_device->pdev)) { 
+        pr_err("Failed to register platform device\n"); 
+        ret = PTR_ERR(hpt_device->pdev); 
+        goto destroy_class; 
+    } 
+ 
+    ret = dma_set_mask_and_coherent(&hpt_device->pdev->dev, DMA_BIT_MASK(64)); 
+    if (ret) { 
+        pr_err("Failed to set DMA mask\n"); 
+        goto unregister_platform_device; 
+    } 
+
+    hpt_device->device = device_create(hpt_device->class, &hpt_device->pdev->dev, hpt_device->devt, NULL, HPT_DEVICE_NAME);
     if (IS_ERR(hpt_device->device)) {
         pr_err("Failed to create device\n");
         ret = PTR_ERR(hpt_device->device);
-		goto destroy_class;
+		goto unregister_platform_device;
     }
 
 	mutex_init(&hpt_device->device_mutex);
 
     return 0;
 
-destroy_class:
-    class_destroy(hpt_device->class);
+unregister_platform_device: 
+    platform_device_unregister(hpt_device->pdev); 
+destroy_class: 
+    class_destroy(hpt_device->class); 
 del_cdev:
     cdev_del(&hpt_device->cdev);
 unregister_chrdev_region:
@@ -560,6 +583,7 @@ static void __exit hpt_exit(void)
 	if(hpt_device)
 	{
 		device_destroy(hpt_device->class, hpt_device->devt);
+		platform_device_unregister(hpt_device->pdev);
 		class_destroy(hpt_device->class);
 		cdev_del(&hpt_device->cdev);
 		unregister_chrdev_region(hpt_device->devt, 1);

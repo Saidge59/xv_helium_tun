@@ -171,6 +171,14 @@ size_t hpt_net_rx(struct hpt_net_device_info *dev_info)
 
 		len = item->len;
 
+		ip_version = len ? (item->data[HPT_IP_VERSION] >> 4) : 0;
+
+        if(unlikely(!(ip_version == 4 || ip_version == 6))) {
+            net_dev->stats.rx_dropped++;
+			pr_err("Drop packets that are not IPv4 or IPv6\n");
+        	continue;
+        }
+
 		skb = netdev_alloc_skb(net_dev, len);
         if(unlikely(!skb)) {
             net_dev->stats.rx_dropped++;
@@ -181,15 +189,6 @@ size_t hpt_net_rx(struct hpt_net_device_info *dev_info)
 
         memcpy(skb_put(skb, len), item->data, len);
 		hpt_set_read_item(dev_info->ring_info_rx);
-
-        ip_version = skb->len ? (skb->data[HPT_IP_VERSION] >> 4) : 0;
-
-        if(unlikely(!(ip_version == 4 || ip_version == 6))) {
-            dev_kfree_skb(skb);
-            net_dev->stats.rx_dropped++;
-			pr_err("Drop packets that are not IPv4 or IPv6\n");
-        	continue;
-        }
 
         // Set SKB headers
         skb_reset_mac_header(skb);

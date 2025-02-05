@@ -53,9 +53,9 @@ struct hpt_net_device_info
     struct hpt_ring_buffer *ring_info_rx;
     struct hpt_ring_buffer *ring_info_tx;
     void *ring_memory;
-    size_t num_pages;
+    size_t num_blocks;
 	struct page **pages;
-    phys_addr_t *phys_base;
+    struct vp_block **vp_blocks;
     uint8_t *ring_data_rx;
     uint8_t *ring_data_tx;
 };
@@ -69,7 +69,17 @@ struct hpt_dev
     struct device *device;
     struct cdev cdev;
     dev_t devt;
+    struct platform_device *pdev; 
     struct mutex device_mutex;
+};
+
+/**********************************************************************************************//**
+* @brief Structure containing information about virtual and physical address
+**************************************************************************************************/
+struct vp_block
+{
+    dma_addr_t phys;
+    void *virt;
 };
 
 /**********************************************************************************************//**
